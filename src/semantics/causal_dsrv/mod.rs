@@ -414,10 +414,7 @@ mod tests {
             ("x as Str", Value::Str("-1.6".into())),
         ];
         for (expression, expected) in cases {
-            let source = format!(
-                "use experimental::{{casts}}\n\
-                 in x: Float\nin integer: Int\nout result\nresult = {expression}"
-            );
+            let source = format!("in x: Float\nin integer: Int\nout result\nresult = {expression}");
             let result = unchecked_output::<CausalSet, CausalDsrvSemantics>(
                 &source,
                 BTreeMap::from([
@@ -448,10 +445,7 @@ mod tests {
                 f64::MAX,
                 f64::MIN,
             ] {
-                let source = format!(
-                    "use experimental::{{casts}}\n\
-                     in x: Float\nout result: Int\nresult = {operator}(x)"
-                );
+                let source = format!("in x: Float\nout result: Int\nresult = {operator}(x)");
                 let evaluation = std::panic::AssertUnwindSafe(unchecked_output::<
                     CausalSet,
                     CausalDsrvSemantics,

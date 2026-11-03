@@ -3768,8 +3768,8 @@ fn library_helper_program(lib: &str) -> crate::lang::dsrv::ElaboratedDsrvSpecifi
         .unwrap()
 }
 
-/// The helper uses casts, which only the library opted into.
-const CASTING_LIB: &str = "use experimental::{modules, functions, casts}\n\
+/// The library helper combines widening and rounding in its body.
+const CASTING_LIB: &str = "use experimental::{modules, functions}\n\
     def helper(n: Int) -> Int = trunc(n as Float * 2.5)\n";
 
 /// Runtime expression source that calls a library def runs that def as the library
@@ -3801,7 +3801,7 @@ fn runtime_expression_source_runs_a_library_def_under_the_librarys_settings() {
 fn changed_library_settings_change_the_dynamic_stream() {
     // The two headers are the same length, so only the settings differ and
     // no span moves.
-    let padded = CASTING_LIB.replace("casts}", "casts,  generics}");
+    let padded = CASTING_LIB.replace("functions}", "functions,  generics}");
     let mut monitor = DataflowMonitor::compile_with_semantics(
         library_helper_program(&padded),
         Semantics::Untimed,
@@ -3828,7 +3828,7 @@ fn changed_library_settings_change_the_dynamic_stream() {
     );
 
     let resettled = DataflowMonitor::compile_with_semantics(
-        library_helper_program(&padded.replace("casts,  generics}", "casts, constants}")),
+        library_helper_program(&padded.replace("functions,  generics}", "functions, constants}")),
         Semantics::Untimed,
     )
     .unwrap();

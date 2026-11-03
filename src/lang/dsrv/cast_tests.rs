@@ -1,16 +1,40 @@
 use crate::{DsrvSpecification, TypeCheckOptions, VarName};
 
 #[test]
-fn casts_require_the_experiment() {
-    let error = "out y: Float = 1 as Float"
-        .parse::<DsrvSpecification>()
-        .expect_err("a cast without the experiment must be rejected");
-    assert!(error.to_string().contains("casts"), "{error}");
+fn casts_and_rounding_do_not_require_an_experiment_in_any_dialect() {
+    for dialect in ["", "language core\n", "language distributed\n"] {
+        for expression in [
+            "out y: Float = 1 as Float",
+            "out y: Str = 1 as Str",
+            "out y: Int = trunc(1.5)",
+            "out y: Int = floor(1.5)",
+            "out y: Int = ceil(1.5)",
+            "out y: Int = round(1.5)",
+        ] {
+            let source = format!("{dialect}{expression}");
+            let specification = source
+                .parse::<DsrvSpecification>()
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert!(
+                specification
+                    .source_context()
+                    .language()
+                    .experiment_names()
+                    .next()
+                    .is_none(),
+                "{source} enabled an experiment"
+            );
+            specification
+                .check(TypeCheckOptions::STRICT)
+                .discard_warnings()
+                .unwrap_or_else(|errors| panic!("{source}: {errors:?}"));
+        }
+    }
 }
 
 #[test]
 fn a_cast_target_is_one_type_name() {
-    let error = "use experimental::{casts}\nout y: Str = 1 as List<Int>"
+    let error = "out y: Str = 1 as List<Int>"
         .parse::<DsrvSpecification>()
         .expect_err("a parameterised cast target must not parse");
     assert!(error.to_string().contains("parse"), "{error}");
@@ -18,8 +42,7 @@ fn a_cast_target_is_one_type_name() {
 
 #[test]
 fn a_named_cast_target_resolves_through_the_type_environment() {
-    let report = "use experimental::{casts}\n\
-                  type Number = Float\n\
+    let report = "type Number = Float\n\
                   out y: Number = 1 as Number"
         .parse::<DsrvSpecification>()
         .expect("the named target parses")
@@ -32,8 +55,7 @@ fn a_named_cast_target_resolves_through_the_type_environment() {
 
 #[test]
 fn casts_bind_below_unary_and_above_multiplication_and_associate_left() {
-    let specification = "use experimental::{casts}\n\
-                         in a: Int\nin b: Int\n\
+    let specification = "in a: Int\nin b: Int\n\
                          out divided: Float = -a / b as Float\n\
                          out chained: Str = 1 as Float as Str"
         .parse::<DsrvSpecification>()

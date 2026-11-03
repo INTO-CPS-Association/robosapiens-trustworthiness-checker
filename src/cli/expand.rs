@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn successful_warnings_stay_on_stderr() {
-        let path = model("use experimental::{casts}\nout y = 1 as Int");
+        let path = model("out y = 1 as Int");
         let (mut out, mut err) = (Vec::new(), Vec::new());
         assert!(
             run_inspection(

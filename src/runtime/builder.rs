@@ -1854,7 +1854,7 @@ mod tests {
     // Replacement preparation, exercised with the production redundant-cast
     // warning rather than a test-only rule.
 
-    const WARNING_REPLACEMENT: &str = "use experimental::{casts}\nout y: Int = 1 as Int";
+    const WARNING_REPLACEMENT: &str = "out y: Int = 1 as Int";
 
     /// Prepare `source`, recording each presentation's warning codes.
     fn prepare_recording(
@@ -1881,11 +1881,8 @@ mod tests {
     #[test]
     fn a_replacement_that_fails_checking_presents_its_warnings_once_first() {
         let presented = RefCell::new(Vec::new());
-        let error = prepare_recording(
-            "use experimental::{casts}\nout y: Int = 1 as Int\nout z: Bool = 1",
-            &presented,
-        )
-        .expect_err("an ill-typed replacement is refused");
+        let error = prepare_recording("out y: Int = 1 as Int\nout z: Bool = 1", &presented)
+            .expect_err("an ill-typed replacement is refused");
         assert!(
             error
                 .to_string()

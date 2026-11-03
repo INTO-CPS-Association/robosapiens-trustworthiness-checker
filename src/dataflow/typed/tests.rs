@@ -35,8 +35,7 @@ fn typed_monitor_evaluates_power_and_inequality() {
 #[test]
 fn typed_monitor_casts_and_rounds_with_ieee_ties_to_even() {
     let specification = elaborated(
-        "use experimental::{casts}\n\
-         in x: Float\nout rounded: Int\n\
+        "in x: Float\nout rounded: Int\n\
          rounded = round(x)",
     );
     let mut monitor =
@@ -59,8 +58,7 @@ fn typed_monitor_casts_and_rounds_with_ieee_ties_to_even() {
 #[test]
 fn typed_monitor_executes_all_scalar_casts() {
     let report = crate::ElaboratedDsrvSpecification::parse_with(
-        "use experimental::{casts}\n\
-         in x: Float\nin integer: Int\n\
+        "in x: Float\nin integer: Int\n\
          out truncated: Int\nout floored: Int\nout ceiled: Int\nout rounded: Int\n\
          out widened: Float\nout identity: Float\n\
          truncated = trunc(x)\nfloored = floor(x)\nceiled = ceil(x)\nrounded = round(x)\n\
@@ -99,8 +97,7 @@ fn typed_monitor_rejects_unrepresentable_rounded_values() {
             f64::MIN,
         ] {
             let specification = elaborated(&format!(
-                "use experimental::{{casts}}\n\
-                 in x: Float\nout result: Int\nresult = {operator}(x)"
+                "in x: Float\nout result: Int\nresult = {operator}(x)"
             ));
             let mut monitor =
                 TypedDataflowMonitor::<(f64,), (i64,)>::compile_checked(specification).unwrap();
@@ -120,8 +117,7 @@ fn typed_monitor_rejects_unrepresentable_rounded_values() {
 #[test]
 fn adaptive_jit_preserves_rounding_when_native_tier_activates() {
     let specification = elaborated(
-        "use experimental::{casts}\n\
-         in x: Float\nout rounded: Int\nout doubled: Float\n\
+        "in x: Float\nout rounded: Int\nout doubled: Float\n\
          rounded = round(x)\ndoubled = x * 2.0",
     );
     let mut monitor = TypedDataflowMonitor::<(f64,), (i64, f64)>::compile_checked_with_jit(
@@ -189,7 +185,7 @@ fn eager_native_jit_compares_a_cast_integer_with_a_float() {
     // An `Int` and a `Float` no longer compare directly, so what is left to
     // check is the comparison after the explicit cast: by value, not by variant.
     let specification = elaborated(
-        "use experimental::casts\nin integer: Int\nin float: Float\nout different: Bool\n\
+        "in integer: Int\nin float: Float\nout different: Bool\n\
          different = (integer as Float) != float",
     );
     let mut monitor =
@@ -217,7 +213,7 @@ fn typed_monitor_reports_a_non_concrete_output_rather_than_guessing() {
 #[test]
 fn jit_direct_uses_native_mixed_tuple_layout() {
     let specification = elaborated(
-        "use experimental::casts\nin x: Int\nin scale: Float\nout result: Float\nout alert: Bool\n\
+        "in x: Int\nin scale: Float\nout result: Float\nout alert: Bool\n\
          result = (x as Float) * scale\nalert = result > 3.5",
     );
     let mut monitor =
@@ -280,8 +276,7 @@ fn jit_direct_reports_integer_power_overflow_distinctly() {
 #[test]
 #[should_panic(expected = "rounded Float is not representable as an Int in direct JIT monitor")]
 fn jit_direct_reports_unrepresentable_rounded_integers_distinctly() {
-    let specification =
-        elaborated("use experimental::casts\nin x: Float\nout result: Int\nresult = round(x)");
+    let specification = elaborated("in x: Float\nout result: Int\nresult = round(x)");
     let mut monitor = TypedJitMonitor::<(f64,), (i64,)>::compile_checked(specification).unwrap();
 
     monitor.evaluate(&(f64::NAN,));
@@ -328,7 +323,7 @@ fn jit_direct_temporal_supports_dynamic_integer_remainder() {
 #[test]
 fn jit_direct_temporal_uses_native_mixed_layout_and_stream_ssa() {
     let specification = elaborated(
-        "use experimental::casts\nin x: Int\nin scale: Float\nout result: Float\nout alert: Bool\n\
+        "in x: Int\nin scale: Float\nout result: Float\nout alert: Bool\n\
          result = (default(x[1], 0) as Float) * scale\nalert = result > 3.5",
     );
     let mut monitor =

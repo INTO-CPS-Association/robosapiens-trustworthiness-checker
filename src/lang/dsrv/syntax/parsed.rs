@@ -39,7 +39,7 @@ contiguous_tree::tree_schema! {
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Cast(value: child, target: data(SourceType)),
         // Frontend-generated type ascription; unlike a source cast, this does
-        // not require the casts experiment.
+        // not originate in the user's DSRV source.
         Ascribe(value: child, target: data(SourceType)),
         Var(variable: data(VarName)),
         // A value named through a module. Expansion inlines the def it

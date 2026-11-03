@@ -75,8 +75,10 @@ fn an_if_is_eager_unless_its_module_takes_on_lazy_if() {
     // Eager: the then-branch advanced on the ticks that did not select it.
     assert_eq!(run(DELAYED_THEN, &rows), [i(0), i(0), i(2)]);
     // Every other experiment leaves `if` eager.
-    let others = "use experimental::{tagged_unions, pattern_matching, generics, modules, \
-                  functions, constants, casts}\n";
+    let others = concat!(
+        "use experimental::{tagged_unions, pattern_matching, generics, modules, ",
+        "functions, constants}\n"
+    );
     assert_eq!(
         run(&format!("{others}{DELAYED_THEN}"), &rows),
         [i(0), i(0), i(2)]

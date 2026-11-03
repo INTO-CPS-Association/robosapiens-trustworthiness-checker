@@ -108,8 +108,7 @@ fn gradual_inference_failure_does_not_retain_findings_from_the_failed_root() {
 
 #[test]
 fn redundant_cast_warning_survives_an_enclosing_merge_to_any() {
-    let source = "use experimental::{casts}\n\
-                  out y: Any = if true then (1 as Int) else \"other\"";
+    let source = "out y: Any = if true then (1 as Int) else \"other\"";
     let report = check(source, TypeCheckOptions::GRADUAL);
     assert!(report.result().is_ok());
     assert_eq!(
@@ -198,7 +197,7 @@ fn merges_that_are_not_surprising_do_not_warn() {
 
 #[test]
 fn redundant_cast_is_reported_once_by_the_authoritative_pass() {
-    let source = "use experimental::{casts}\nout y = 1 as Int";
+    let source = "out y = 1 as Int";
     let report = check(source, TypeCheckOptions::GRADUAL);
     assert!(report.result().is_ok());
     assert_eq!(
@@ -209,10 +208,7 @@ fn redundant_cast_is_reported_once_by_the_authoritative_pass() {
 
 #[test]
 fn failed_or_unresolved_casts_do_not_warn() {
-    for source in [
-        "use experimental::{casts}\nout y: Int = true as Int",
-        "use experimental::{casts}\nout y: Int = missing as Int",
-    ] {
+    for source in ["out y: Int = true as Int", "out y: Int = missing as Int"] {
         for options in MODES {
             let report = check(source, options);
             assert!(report.result().is_err(), "{options:?}: {source}");
@@ -223,7 +219,7 @@ fn failed_or_unresolved_casts_do_not_warn() {
 
 #[test]
 fn contextual_result_hint_does_not_manufacture_cast_redundancy() {
-    let source = "use experimental::{casts}\nin x\nout y: Int = x as Int";
+    let source = "in x\nout y: Int = x as Int";
     let report = check(source, TypeCheckOptions::GRADUAL);
     assert!(report.result().is_err());
     assert!(report.warnings().is_empty());
@@ -335,7 +331,7 @@ fn runtime_expressions_deliberately_discard_a_redundant_cast_warning() {
     use crate::VarName;
     use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 
-    let spec = "use experimental::{casts}\nout y: Int = dynamic(\"1\": Int)"
+    let spec = "out y: Int = dynamic(\"1\": Int)"
         .parse::<DsrvSpecification>()
         .expect("the enclosing model parses");
     let metadata = spec

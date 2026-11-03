@@ -120,14 +120,12 @@ fn casts_and_rounding_execute_in_the_jit_with_canonical_parity() {
             vec![vec![Value::Float(-1.1)], vec![Value::Float(1.1)]],
         ),
     ] {
-        let source = format!(
-            "use experimental::casts\nin x: Float\nout result: Int\nresult = {function}(x)"
-        );
+        let source = format!("in x: Float\nout result: Int\nresult = {function}(x)");
         assert_rows(&source, &rows);
     }
 
     assert_rows(
-        "use experimental::casts\nin x: Int\nout result: Float\nresult = x as Float",
+        "in x: Int\nout result: Float\nresult = x as Float",
         &[
             vec![Value::Int(i64::MIN)],
             vec![Value::Int(-9_007_199_254_740_993)],
@@ -136,7 +134,7 @@ fn casts_and_rounding_execute_in_the_jit_with_canonical_parity() {
         ],
     );
     assert_jit_row(
-        "use experimental::casts\nin x: Float\nout result: Int\nresult = round(x)",
+        "in x: Float\nout result: Int\nresult = round(x)",
         &[Value::Float(-9_223_372_036_854_775_808.0)],
         &[Value::Int(i64::MIN)],
     );
@@ -153,10 +151,7 @@ fn unrepresentable_rounding_side_exits_before_canonical_failure() {
             LIMIT,
             f64::from_bits((-LIMIT).to_bits() + 1),
         ] {
-            let source = format!(
-                "use experimental::casts\n\
-                 in x: Float\nout result: Int\nresult = {function}(x)"
-            );
+            let source = format!("in x: Float\nout result: Int\nresult = {function}(x)");
             let checked = elaborated(&source);
             let mut monitor =
                 DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
@@ -384,7 +379,7 @@ fn floating_point_graph_runs_natively() {
 #[test]
 fn mixed_numeric_graph_converts_integers_natively() {
     assert_rows(
-        "use experimental::casts\nin x: Int\nin y: Float\nout result: Float\n\
+        "in x: Int\nin y: Float\nout result: Float\n\
          result = (x as Float) + y * 2.0",
         &[
             vec![Value::Int(2), Value::Float(4.25)],

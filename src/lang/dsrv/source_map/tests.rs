@@ -909,7 +909,7 @@ fn a_prepared_site_accepts_text_on_another_thread_after_the_program_is_dropped()
 #[test]
 fn checked_specifications_of_labelled_text_are_located() {
     let report = CheckedDsrvSpecification::parse_with(
-        "use experimental::{casts}\nin x: Int\nout y: Int\ny = x as Int",
+        "in x: Int\nout y: Int\ny = x as Int",
         TypeCheckOptions::STRICT,
     )
     .unwrap();

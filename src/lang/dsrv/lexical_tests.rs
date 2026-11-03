@@ -107,45 +107,51 @@ fn text_at(root: &str, span: Span) -> &str {
 // Whose header authorises syntax
 // -----------------------------------------------------------------------------
 
-const CASTING_LIB: &str = "use experimental::{modules, functions, casts}\n\
-    def half(n: Int) -> Float = n as Float / 2.0\n\
+const MATCHING_LIB: &str = "use experimental::{modules, functions, pattern_matching}\n\
+    def half() -> Int = match(true) { true -> 1, _ -> 0, }\n\
     def good(n: Int) -> Int = n * 2\n";
 
 const PLAIN_LIB: &str = "use experimental::{modules, functions}\n\
-    def half(n: Int) -> Float = n as Float / 2.0\n\
+    def half() -> Int = match(true) { true -> 1, _ -> 0, }\n\
     def good(n: Int) -> Int = n * 2\n";
 
 #[test]
 fn a_library_body_may_use_syntax_its_own_header_enables() {
     let spec = program(
-        &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Float\ny = lib::half(x)\n"),
-        &[("lib", CASTING_LIB)],
+        &format!("{ROOT}mod lib\nuse lib\nout y: Int\ny = lib::half()\n"),
+        &[("lib", MATCHING_LIB)],
     );
     spec.check(TypeCheckOptions::STRICT)
         .discard_warnings()
-        .expect("the library's cast checks");
+        .expect("the library's match expression checks");
 }
 
 #[test]
 fn a_library_body_may_not_use_syntax_only_its_caller_enables() {
-    let root = "use experimental::{modules, functions, casts}\nmod lib\nuse lib\n\
-        in x: Int\nout y: Float\ny = lib::half(x)\n";
-    let error = expand(root, &[("lib", PLAIN_LIB)]).expect_err("the library did not opt in");
+    let root = "use experimental::{modules, functions, pattern_matching}\n\
+        mod lib\nuse lib\nout y: Int\ny = lib::half()\n";
+    let error = expand(root, &[("lib", PLAIN_LIB)])
+        .expect_err("the library did not opt in to pattern matching");
     // Reported at the call, which is where inlined code is placed.
-    assert_eq!(needed(error, root), ("casts", "lib::half(x)"));
+    assert_eq!(needed(error, root), ("pattern_matching", "lib::half()"));
 }
 
 #[test]
 fn a_callers_argument_is_judged_by_the_callers_header() {
-    let casting_root = "use experimental::{modules, functions, casts}\nmod lib\nuse lib\n\
-        in x: Int\nout y: Int\ny = lib::good(x as Int)\n";
-    program(casting_root, &[("lib", PLAIN_LIB)]);
+    let matching_root = "use experimental::{modules, functions, pattern_matching}\n\
+        mod lib\nuse lib\nin x: Int\nout y: Int\n\
+        y = lib::good(match(true) { true -> x, _ -> 0, })\n";
+    program(matching_root, &[("lib", PLAIN_LIB)]);
 
-    let plain_root =
-        format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Int\ny = lib::good(x as Int)\n");
-    let error =
-        expand(&plain_root, &[("lib", CASTING_LIB)]).expect_err("the caller did not opt in");
-    assert_eq!(needed(error, &plain_root), ("casts", "x as Int"));
+    let plain_root = "use experimental::{modules, functions}\n\
+        mod lib\nuse lib\nin x: Int\nout y: Int\n\
+        y = lib::good(match(true) { true -> x, _ -> 0, })\n";
+    let error = expand(plain_root, &[("lib", MATCHING_LIB)])
+        .expect_err("the caller did not opt in to pattern matching");
+    assert_eq!(
+        needed(error, plain_root),
+        ("pattern_matching", "match(true) { true -> x, _ -> 0, }")
+    );
 }
 
 /// Code reached through a module in between is judged by the module that
@@ -155,26 +161,26 @@ fn relayed_code_is_judged_by_the_module_that_wrote_it() {
     let mid = |experiments: &str| {
         format!(
             "use experimental::{{{experiments}}}\nmod leaf\nuse mid::leaf\n\
-             def relay(n: Int) -> Float = mid::leaf::half(n)\n"
+             def relay() -> Int = mid::leaf::half()\n"
         )
     };
-    let root = format!("{ROOT}mod mid\nuse mid\nin x: Int\nout y: Float\ny = mid::relay(x)\n");
+    let root = format!("{ROOT}mod mid\nuse mid\nout y: Int\ny = mid::relay()\n");
     program(
         &root,
         &[
             ("mid", &mid("modules, functions")),
-            ("mid::leaf", CASTING_LIB),
+            ("mid::leaf", MATCHING_LIB),
         ],
     );
     let error = expand(
         &root,
         &[
-            ("mid", &mid("modules, functions, casts")),
+            ("mid", &mid("modules, functions, pattern_matching")),
             ("mid::leaf", PLAIN_LIB),
         ],
     )
     .expect_err("the leaf did not opt in");
-    assert_eq!(needed(error, &root), ("casts", "mid::relay(x)"));
+    assert_eq!(needed(error, &root), ("pattern_matching", "mid::relay()"));
 }
 
 // -----------------------------------------------------------------------------
@@ -197,7 +203,7 @@ fn a_library_body_resolves_types_in_its_own_namespace() {
 /// A root alias of the same name does not change what the library meant.
 #[test]
 fn a_callers_alias_does_not_shadow_the_librarys() {
-    let lib = "use experimental::{modules, functions, casts}\ntype Measure = Float\n\
+    let lib = "use experimental::{modules, functions}\ntype Measure = Float\n\
         def scale(n: Int) -> Float = n as Measure\n";
     let spec = program(
         &format!(
@@ -420,7 +426,7 @@ fn a_library_offset_names_its_own_constant() {
 // Text supplied at run time
 // -----------------------------------------------------------------------------
 
-const HELPER_LIB: &str = "use experimental::{modules, functions, casts}\n\
+const HELPER_LIB: &str = "use experimental::{modules, functions, pattern_matching}\n\
     def helper(n: Int) -> Int = n * 10\n\
     def read(s: Str) -> Int = dynamic(s: Int)\n";
 
@@ -447,10 +453,10 @@ fn text_supplied_to_a_library_dynamic_calls_the_librarys_helper() {
 fn text_supplied_to_a_library_dynamic_is_judged_by_the_librarys_header() {
     let spec = helper_program();
     site(&spec, "y")
-        .parse("2.5 as Int")
-        .expect("the library opted into casts");
+        .parse("match(true) { true -> 2, _ -> 0, }")
+        .expect("the library opted into pattern matching");
     assert!(matches!(
-        site(&spec, "z").parse("2.5 as Int"),
+        site(&spec, "z").parse("match(true) { true -> 2, _ -> 0, }"),
         Err(RuntimeExpressionError::Parse { .. })
     ));
 }
@@ -467,7 +473,7 @@ fn a_library_dynamic_carries_the_librarys_environment() {
             .language()
             .experiment_names()
             .collect::<Vec<_>>(),
-        ["modules", "functions", "casts"]
+        ["pattern_matching", "modules", "functions"]
     );
     assert_eq!(
         caller
@@ -556,7 +562,7 @@ fn named(site: Option<&OwnedSite>) -> Option<(String, String)> {
 /// note naming where it was written.
 #[test]
 fn a_finding_in_library_code_is_primary_at_the_call_with_a_definition_note() {
-    let lib = "use experimental::{modules, functions, casts}\ntype Meters = Int\n\
+    let lib = "use experimental::{modules, functions}\ntype Meters = Int\n\
         def bad(m: Meters) -> Meters = (m as Float) + true\n";
     let errors = program(
         &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Int\ny = lib::bad(x)\n"),
@@ -619,7 +625,7 @@ fn helper_root() -> String {
 fn a_library_sites_identity_follows_the_librarys_settings_and_not_its_label() {
     let root = helper_root();
     // Headers of one length, so that changing the settings moves no span.
-    let lib = HELPER_LIB.replace("casts}", "casts,  generics}");
+    let lib = HELPER_LIB.replace("pattern_matching}", "pattern_matching,  generics}");
     let original = program(&root, &[("lib", &lib)]);
     let relabelled = expand_labelled(&root, &[("lib", &lib)], "elsewhere/").expect("expands");
     assert_eq!(identity(&original, "y"), identity(&relabelled, "y"));
@@ -627,7 +633,10 @@ fn a_library_sites_identity_follows_the_librarys_settings_and_not_its_label() {
     assert!(!identity(&original, "y").contains("lib.dsrv"));
 
     // An experiment nothing uses is still a different reading of the text.
-    let resettled = lib.replace("casts,  generics}", "casts, constants}");
+    let resettled = lib.replace(
+        "pattern_matching,  generics}",
+        "pattern_matching, constants}",
+    );
     let changed = program(&root, &[("lib", &resettled)]);
     assert_ne!(identity(&original, "y"), identity(&changed, "y"));
     // The caller's site can call the library's defs, so it changes too.
@@ -726,7 +735,7 @@ fn a_library_site_accepts_text_on_another_thread_after_the_program_is_dropped() 
     drop(elaborated);
     let body = std::thread::spawn(move || {
         site.parse_and_check("helper(2) + trunc(2.5)")
-            .expect("the library's helper and casts")
+            .expect("the library's helper and rounding functions")
             .as_ref()
             .expr()
             .to_string()
@@ -745,7 +754,7 @@ fn a_library_site_accepts_text_on_another_thread_after_the_program_is_dropped() 
 /// syntax, not the caller's.
 #[test]
 fn text_supplied_to_a_library_defer_is_read_where_the_library_wrote_it() {
-    let lib = "use experimental::{modules, functions, casts}\n\
+    let lib = "use experimental::{modules, functions, pattern_matching}\n\
         def helper(n: Int) -> Int = n * 10\n\
         def wait(s: Str) -> Int = defer(s: Int)\n";
     let spec = program(
@@ -770,10 +779,10 @@ fn text_supplied_to_a_library_defer_is_read_where_the_library_wrote_it() {
     );
 
     library
-        .parse("2.5 as Int")
-        .expect("the library opted into casts");
+        .parse("match(true) { true -> 2, _ -> 0, }")
+        .expect("the library opted into pattern matching");
     assert!(matches!(
-        caller.parse("2.5 as Int"),
+        caller.parse("match(true) { true -> 2, _ -> 0, }"),
         Err(RuntimeExpressionError::Parse { .. })
     ));
 }

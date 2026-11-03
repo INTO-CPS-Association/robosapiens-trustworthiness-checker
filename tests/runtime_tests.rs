@@ -649,7 +649,6 @@ proptest::proptest! {
         rows in proptest::collection::vec((-100i64..100, 1i64..100, small_float()), 1..12),
     ) {
         let spec = "\
-use experimental::casts
 in x: Int
 in y: Int
 in f: Float
@@ -1205,13 +1204,7 @@ fn admitted_programs(expressions: Vec<String>, arity: usize, minimum: usize) -> 
                 .zip(OPERAND_NAMES)
                 .map(|(operand, name)| format!("in {name}: {}\n", operand.name()))
                 .collect();
-            // The casts experiment gates rounding and `as`, and costs nothing
-            // for programs that do not use them.
-            let spec = |output: &str| {
-                format!(
-                    "use experimental::casts\n{inputs}out result{output}\nresult = {expression}"
-                )
-            };
+            let spec = |output: &str| format!("{inputs}out result{output}\nresult = {expression}");
             let parse = |spec: &str| {
                 spec.parse::<DsrvSpecification>()
                     .unwrap_or_else(|error| panic!("matrix spec {spec:?} parses: {error:?}"))

@@ -79,7 +79,6 @@ pub enum Feature {
     Modules,
     Functions,
     Constants,
-    Casts,
     LazyIf,
 }
 
@@ -92,7 +91,6 @@ impl Feature {
         Self::Modules,
         Self::Functions,
         Self::Constants,
-        Self::Casts,
         Self::LazyIf,
     ];
 
@@ -104,7 +102,6 @@ impl Feature {
             Self::Modules => "modules",
             Self::Functions => "functions",
             Self::Constants => "constants",
-            Self::Casts => "casts",
             Self::LazyIf => "lazy_if",
         }
     }
@@ -139,7 +136,6 @@ impl Feature {
                 | Self::Modules
                 | Self::Functions
                 | Self::Constants
-                | Self::Casts
                 | Self::LazyIf => true,
             },
         }
@@ -205,7 +201,9 @@ impl MetaFeature {
 ///
 /// Revision 3: `lazy_if` joins the experiments, and with it
 /// `high_level_dsrv`.
-pub const EXPERIMENTAL_REVISION: u32 = 3;
+///
+/// Revision 4: casts and rounding are stable and leave the experiment set.
+pub const EXPERIMENTAL_REVISION: u32 = 4;
 
 /// How an `if` chooses between its branches.
 ///
@@ -641,11 +639,6 @@ pub(crate) fn check_experiment_node(
         ExprKind::Constructor(..) => ("a union constructor", Feature::TaggedUnions),
         ExprKind::Match(..) => ("`match`", Feature::PatternMatching),
         ExprKind::Matches(..) => ("`matches`", Feature::PatternMatching),
-        ExprKind::Cast(..)
-        | ExprKind::Trunc(..)
-        | ExprKind::Floor(..)
-        | ExprKind::Ceil(..)
-        | ExprKind::Round(..) => ("a cast", Feature::Casts),
         _ => return Ok(()),
     };
     if language.has(feature) {
@@ -1020,7 +1013,7 @@ mod tests {
             matches!(&unknown, UnknownFeature { name, known, .. }
                 if name == "teleporting"
                     && known
-                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts, lazy_if"),
+                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, lazy_if"),
             "{unknown}"
         );
         // An import of anything but `experimental` is an ordinary item
@@ -1267,7 +1260,6 @@ mod tests {
         ),
         (Feature::Functions, "def f(v: Int) -> Int = v\nin x: Int\n"),
         (Feature::Constants, "const limit: Int = 3\nin x: Int\n"),
-        (Feature::Casts, "in x: Int\nout y: Float\ny = x as Float\n"),
     ];
 
     // The resolved set is pinned together with the revision: an experiment
@@ -1289,10 +1281,9 @@ mod tests {
                     Feature::Modules,
                     Feature::Functions,
                     Feature::Constants,
-                    Feature::Casts,
                     Feature::LazyIf,
                 ],
-                3,
+                4,
             )
         );
         assert_eq!(
@@ -1324,7 +1315,7 @@ mod tests {
             format!("use experimental::{{high_level_dsrv}}\n{BODY}"),
             // Naming the meta-feature and some of its experiments, or the
             // meta-feature twice, adds up as other repeated names do.
-            format!("use experimental::{{casts, high_level_dsrv, tagged_unions}}\n{BODY}"),
+            format!("use experimental::{{generics, high_level_dsrv, tagged_unions}}\n{BODY}"),
             format!("{HIGH_LEVEL}{HIGH_LEVEL}use experimental::generics\n{BODY}"),
         ];
         for source in &spellings {
@@ -1377,8 +1368,8 @@ mod tests {
         }
         // A meta-feature is a name, not a path or a namespace.
         for header in [
-            "use experimental::high_level_dsrv::casts\n",
-            "use experimental::{high_level_dsrv::casts}\n",
+            "use experimental::high_level_dsrv::generics\n",
+            "use experimental::{high_level_dsrv::generics}\n",
             "use experimental::{high_level_dsrv::*}\n",
             "use experimental::high_level\n",
         ] {

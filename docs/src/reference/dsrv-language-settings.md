@@ -23,6 +23,10 @@ still be called `core` or `experimental`.
 | Full DSRV | the default | Core plus maths functions, type aliases, collections, structs, lambdas and calls. |
 | Distributed DSRV | `language distributed` | Full plus the distribution primitives `dist` and `monitored_at`, for specifications placed across nodes. |
 
+`value as Type` and the `trunc`, `floor`, `ceil`, and `round` functions are
+available in Core, Full, and Distributed DSRV without an experiment
+declaration.
+
 Core DSRV is the language closest to the published DSRV calculus. A Core file
 that uses anything outside Core is rejected at that construct:
 
@@ -81,7 +85,6 @@ still use a construct that has a narrower runtime requirement.
 | `modules` | Adds filesystem and embedded-module declarations and imports. | Each module's own header governs syntax written in that module; imports do not transfer the caller's experiments into it. | all |
 | `functions` | Adds named `def` functions. | Functions imported through `modules` are expanded under the defining module's language settings. | all |
 | `constants` | Adds `const` declarations and named stream offsets. | A constant declared inside a module also requires `modules`. | all |
-| `casts` | Adds `as`, `trunc`, `floor`, `ceil`, and `round`. | Float-to-integer conversion uses an explicit rounding function; see [DSRV syntax](dsrv-syntax.md#operators). | all |
 | `lazy_if` | Makes `if` evaluate only its selected branch. | Changes behavior; each branch has a separate local timeline. A `match` arm is independently selected-only. | `dataflow`, `reconf-dataflow` |
 <!-- dsrv-experiments:end -->
 

@@ -1120,7 +1120,7 @@ mod integration_tests {
         let diagnostic = "warning[dsrv.redundant-cast]: cast from Int to Int is redundant";
         assert_eq!(stderr.matches(diagnostic).count(), 1, "{stderr}");
         assert!(
-            stderr.contains("redundant_cast.dsrv:4:5 (bytes 51..59)"),
+            stderr.contains("redundant_cast.dsrv:3:5 (bytes 25..33)"),
             "{stderr}"
         );
         assert!(!stdout.contains("warning["), "{stdout}");

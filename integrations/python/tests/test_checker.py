@@ -427,14 +427,12 @@ out verdict: Bool
 verdict = velocity
 """
 
-REDUNDANT_CAST_MONITOR = """use experimental::{casts}
-in velocity: Int
+REDUNDANT_CAST_MONITOR = """in velocity: Int
 out verdict: Int
 verdict = velocity as Int
 """
 
-REDUNDANT_CAST_WITH_ERROR_MONITOR = """use experimental::{casts}
-out y: Int
+REDUNDANT_CAST_WITH_ERROR_MONITOR = """out y: Int
 out z: Bool
 y = 1 as Int
 z = 1
@@ -512,7 +510,6 @@ def test_successful_construction_exposes_real_warnings_for_every_constructor(
 
 
 CAST_WARNING_MONITOR = """
-use experimental::{casts}
 in x: Int
 out y: Int = x as Int
 """

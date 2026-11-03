@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn localisation_reuses_the_submitted_models_checked_tree() {
-        let source = "use experimental::{casts}\nin x: Int\nout y: Int\ny = x as Int";
+        let source = "in x: Int\nout y: Int\ny = x as Int";
         let report = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
             .expect("the submitted model parses");
         assert_eq!(

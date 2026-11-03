@@ -508,7 +508,7 @@ mod tests {
     }
 
     fn evaluate(source: &str, environment: &dyn Environment) -> Evaluated {
-        let context = parse_str("use experimental::casts\n")
+        let context = parse_str("")
             .expect("test language settings should parse")
             .source_context()
             .clone();
@@ -685,7 +685,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut ctx = Context::<TestConfig>::new(executor, names, streams, 8);
-        let context = parse_str("use experimental::casts\n")
+        let context = parse_str("")
             .expect("test language settings should parse")
             .source_context()
             .clone();

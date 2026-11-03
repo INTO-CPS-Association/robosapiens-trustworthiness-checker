@@ -674,8 +674,7 @@ mod tests {
 
     #[test]
     fn constraint_profiles_lower_and_evaluate_casts_without_saturating() {
-        let spec = ("use experimental::casts\n\
-                     in x: Float\nin integer: Int\n\
+        let spec = ("in x: Float\nin integer: Int\n\
                      out truncated: Int\nout floored: Int\nout ceiled: Int\n\
                      out rounded: Int\nout widened: Float\nout text: Str\n\
                      truncated = trunc(x)\nfloored = floor(x)\nceiled = ceil(x)\n\
@@ -720,7 +719,7 @@ mod tests {
 
         for operator in ["trunc", "floor", "ceil", "round"] {
             let source = format!(
-                "use experimental::casts\nin x: Float\nout constraint: Int\n\
+                "in x: Float\nout constraint: Int\n\
                  constraint = {operator}(x)"
             );
             let spec = source.parse::<DsrvSpecification>().unwrap();
