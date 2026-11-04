@@ -9,6 +9,9 @@
 //! gave that node. For a node inlined from a library's def, that is the
 //! library's context and defs, not its caller's.
 //!
+//! Checked text is elaborated before it runs, as a specification is, so a
+//! literal checking typed `Float` is a `Float`.
+//!
 //! Warnings proved while checking such text are discarded: runtime expression source has
 //! no channel to present them on, so a runtime sees only whether the text
 //! checked.
@@ -33,7 +36,9 @@ use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::source_map::{
     NodeOrigin, RUNTIME_EXPRESSION_LABEL, SourceArchive, SourceFile, SourceId, SourceLabel,
 };
-use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
+use crate::lang::dsrv::type_checker::{
+    StreamTypeEnvironment, TCType, check_and_elaborate_expression,
+};
 
 /// The type and environment runtime expression source is checked against: what elaboration
 /// gave the `dynamic` or `defer` node the text was supplied to.
@@ -244,7 +249,9 @@ impl RuntimeExpressionSite {
         sources: Option<&SourceArchive>,
     ) -> Result<CheckedExpr, RuntimeExpressionError> {
         let checked = match &self.typing {
-            Some(typing) => check_expression(expr, &typing.expected, &typing.environment, sources),
+            Some(typing) => {
+                check_and_elaborate_expression(expr, &typing.expected, &typing.environment, sources)
+            }
             None => {
                 let environment = expr
                     .as_ref()
@@ -252,7 +259,12 @@ impl RuntimeExpressionSite {
                     .into_iter()
                     .map(|name| (name, StreamType::Any))
                     .collect::<BTreeMap<_, _>>();
-                check_expression(expr, &TCType::Any, &AstShared::new(environment), sources)
+                check_and_elaborate_expression(
+                    expr,
+                    &TCType::Any,
+                    &AstShared::new(environment),
+                    sources,
+                )
             }
         };
         // Runtime expression source has nowhere to present warnings.

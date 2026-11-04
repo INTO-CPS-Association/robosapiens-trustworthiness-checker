@@ -201,7 +201,22 @@ pub(crate) fn check_expression(
 ) -> SemanticAnalysisReport<CheckedExpr> {
     let mut warnings = WarningCollector::default();
     let result = check_expression_with(expr, expected, environment, &mut warnings);
-    warnings.report(result, sources)
+    warnings
+        .report(result, sources)
+        .map_checked(|(checked, _)| checked)
+}
+
+pub(crate) fn check_and_elaborate_expression(
+    expr: Expr,
+    expected: &TCType,
+    environment: &AstShared<StreamTypeEnvironment>,
+    sources: Option<&SourceArchive>,
+) -> SemanticAnalysisReport<CheckedExpr> {
+    let mut warnings = WarningCollector::default();
+    let result = check_expression_with(expr, expected, environment, &mut warnings);
+    warnings
+        .report(result, sources)
+        .map_checked(|(checked, runtime_checks)| checked.elaborate(&runtime_checks, sources))
 }
 
 fn check_expression_with(
@@ -209,7 +224,7 @@ fn check_expression_with(
     expected: &TCType,
     environment: &AstShared<StreamTypeEnvironment>,
     warnings: &mut WarningCollector,
-) -> SemanticResult<CheckedExpr> {
+) -> SemanticResult<(CheckedExpr, RuntimeChecks)> {
     let mut context = TypeContext::new(
         Cow::Borrowed(environment.as_ref()),
         Some(expr.annotations_builder()),
@@ -217,6 +232,11 @@ fn check_expression_with(
         Some(warnings),
     );
     check(expr.as_ref(), Some(expected), &mut context).map_err(|error| vec![error])?;
+    let runtime_checks = finish_runtime_checks(
+        std::mem::take(&mut context.runtime_checks),
+        expr.sparse_annotations_builder(),
+        expr.as_ref().postorder(),
+    );
     #[cfg(debug_assertions)]
     assert_expr_fully_typed(expr.as_ref(), context.expr_types.as_ref().unwrap());
     let expr_types = context
@@ -224,10 +244,9 @@ fn check_expression_with(
         .expect("expression checking records expression types")
         .finish()
         .expect("successful checking typed every expression");
-    Ok(CheckedExpr::new(
-        expr,
-        expr_types,
-        AstShared::clone(environment),
+    Ok((
+        CheckedExpr::new(expr, expr_types, AstShared::clone(environment)),
+        runtime_checks,
     ))
 }
 

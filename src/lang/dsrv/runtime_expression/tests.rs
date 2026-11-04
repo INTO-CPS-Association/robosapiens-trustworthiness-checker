@@ -3,7 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use super::*;
 use crate::VarName;
 use crate::dsrv_fixtures::checked;
-use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use crate::lang::dsrv::ast::{CheckedDsrvSpecification, SyntaxLiteral};
 use crate::lang::dsrv::elaborate::ElaboratedDsrvSpecification;
 
 /// Runtime expressions in a root equation, an auxiliary equation and a def
@@ -333,6 +333,25 @@ fn checked_runtime_source_is_prepared_before_it_escapes() {
         .runtime_expression();
     assert_eq!(nested_site.typing().unwrap().expected, TCType::Int);
     assert!(nested_site.same_lexical_environment(&site));
+}
+
+#[test]
+fn checked_runtime_source_is_elaborated_at_the_type_its_site_expects() {
+    let elaborated = elaborated("in s: Str\nout y: Float\ny = dynamic(s: Float)");
+    let expr = elaborated.var_expr(&var("y")).expect("y exists");
+    let site = expr
+        .cursor(occurrence(expr.expr()))
+        .runtime_expression()
+        .clone();
+
+    let literal = site
+        .parse_and_check("1")
+        .expect("an Int literal adopts Float");
+    assert_eq!(literal.typ(), &TCType::Float);
+    assert!(matches!(
+        literal.as_ref().view(),
+        crate::lang::dsrv::ast::ExprView::Val(SyntaxLiteral::Float(value)) if *value == 1.0
+    ));
 }
 
 #[test]

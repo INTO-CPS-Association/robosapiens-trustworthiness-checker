@@ -20,14 +20,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
 
+use contiguous_tree::TreeCursorExt;
+
 use super::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, CheckedExprRef, DsrvSpecification,
-    ExprBuilder, ExprForestMap, ExprId, ExprKind, ExprView, SyntaxLiteral,
+    ExprBuilder, ExprForestMap, ExprId, ExprKind, ExprRewriteNode, ExprView, SyntaxLiteral,
 };
 use super::diagnostics::SemanticAnalysisReport;
 use super::parser::DsrvParseError;
 use super::pipeline::{TypeCheckMode, TypeCheckOptions};
-use super::type_checker::TCType;
+use super::source_map::SourceArchive;
+use super::type_checker::{RuntimeChecks, TCType};
 use crate::core::{
     RuntimeCapabilities, RuntimeCapabilityRequirement, Specification, StreamType, VarName,
 };
@@ -129,6 +132,77 @@ impl DsrvSpecification {
     }
 }
 
+impl CheckedExpr {
+    pub(crate) fn elaborate(
+        self,
+        runtime_checks: &RuntimeChecks,
+        sources: Option<&SourceArchive>,
+    ) -> CheckedExpr {
+        let unlocated = SourceArchive::default();
+        let sources = sources.unwrap_or(&unlocated);
+        let root = self.as_ref();
+        let mut builder = ExprBuilder::with_capacity(root.postorder().count());
+        let mut types = Vec::new();
+        let root = builder
+            .try_rewrite_forest([root], |node| {
+                elaborate_node(node, Some((runtime_checks, sources)), &mut types)
+            })
+            .expect("elaboration keeps every node's children")[0];
+        let expr = builder
+            .finish(root)
+            .expect("elaboration emits one complete tree");
+        let mut expr_types = expr.annotations_builder();
+        assert_eq!(types.len(), expr.as_ref().postorder().count());
+        for (node, typ) in expr.as_ref().postorder().zip(types) {
+            expr_types
+                .insert(node, typ)
+                .expect("an emitted node belongs to the elaborated tree");
+        }
+        let expr_types = expr_types
+            .finish()
+            .expect("elaboration types every node it emits");
+        CheckedExpr::new(expr, expr_types, AstShared::clone(self.environment()))
+    }
+}
+
+/// Rewrite one checked node into its elaborated subtree, pushing the type of
+/// each node it emits in allocation order. `runtime_checks`, with the archive
+/// that locates them, are those of the tree the node belongs to.
+fn elaborate_node(
+    mut node: ExprRewriteNode<'_, '_, CheckedExprRef<'_>>,
+    runtime_checks: Option<(&RuntimeChecks, &SourceArchive)>,
+    types: &mut Vec<TCType>,
+) -> Result<ExprId, contiguous_tree::BuildError<ExprId>> {
+    let source = node.source();
+    // An integer literal that checking typed as `Float` is a `Float`
+    // literal from here on, so every runtime sees the value it has.
+    let kind = match (source.view(), source.typ()) {
+        (ExprView::Val(SyntaxLiteral::Int(literal)), TCType::Float) => {
+            ExprKind::Val(SyntaxLiteral::Float(*literal as f64).into())
+        }
+        _ => source.kind().clone(),
+    };
+    let kind = node.source_node().rebuild(kind);
+    let metadata = source.expr().metadata();
+    let id = node.alloc(kind, metadata.clone())?;
+    types.push(source.typ().clone());
+    // An `Any` value checking accepted at a concrete type is checked
+    // as it runs: the node is wrapped in a check that has that type,
+    // and that carries the files that locate the node.
+    let Some((target, sources)) = runtime_checks
+        .and_then(|(checks, sources)| checks.get(source.expr()).map(|target| (target, sources)))
+    else {
+        return Ok(id);
+    };
+    let location = sources.locate(metadata.origin, metadata.span);
+    let check = node.alloc(
+        ExprKind::Check(id, target.clone(), location),
+        metadata.clone(),
+    )?;
+    types.push(TCType::from_stream_type(target));
+    Ok(check)
+}
+
 /// Rewrite every equation of `checked` into fresh storage, recording the type
 /// of each emitted node in allocation order.
 fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecification {
@@ -143,33 +217,12 @@ fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecificatio
             .expect("every equation of a checked specification is typed")
     });
     let roots = builder
-        .try_rewrite_forest(roots, |mut node| {
-            let source = node.source();
-            // An integer literal that checking typed as `Float` is a `Float`
-            // literal from here on, so every runtime sees the value it has.
-            let kind = match (source.view(), source.typ()) {
-                (ExprView::Val(SyntaxLiteral::Int(literal)), TCType::Float) => {
-                    ExprKind::Val(SyntaxLiteral::Float(*literal as f64).into())
-                }
-                _ => source.kind().clone(),
-            };
-            let kind = node.source_node().rebuild(kind);
-            let metadata = source.expr().metadata();
-            let id = node.alloc(kind, metadata.clone())?;
-            types.push(source.typ().clone());
-            // An `Any` value checking accepted at a concrete type is checked
-            // as it runs: the node is wrapped in a check that has that type,
-            // and that carries the files that locate the node.
-            let Some(target) = runtime_checks.and_then(|checks| checks.get(source.expr())) else {
-                return Ok::<_, contiguous_tree::BuildError<ExprId>>(id);
-            };
-            let location = spec.sources.locate(metadata.origin, metadata.span);
-            let check = node.alloc(
-                ExprKind::Check(id, target.clone(), location),
-                metadata.clone(),
-            )?;
-            types.push(TCType::from_stream_type(target));
-            Ok(check)
+        .try_rewrite_forest(roots, |node| {
+            elaborate_node(
+                node,
+                runtime_checks.map(|checks| (checks, spec.sources.as_ref())),
+                &mut types,
+            )
         })
         .expect("elaboration keeps every node's children");
     let forest = builder

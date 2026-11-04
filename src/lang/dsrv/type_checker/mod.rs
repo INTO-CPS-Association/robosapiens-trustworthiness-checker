@@ -40,5 +40,7 @@ pub use checker::type_check_expression;
 pub use types::*;
 pub use validation::*;
 
-pub(crate) use checker::{check_expression, type_check};
+#[cfg(test)]
+pub(crate) use checker::check_expression;
+pub(crate) use checker::{check_and_elaborate_expression, type_check};
 pub(crate) use gradual::type_check_gradual;

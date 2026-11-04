@@ -4389,3 +4389,82 @@ fn a_changed_output_type_changes_the_definition_key() {
         program("Any").definition_key()
     );
 }
+
+#[test]
+fn runtime_text_literal_takes_the_float_type_its_site_expects() {
+    let evaluate = |specification: &str, text: &str| {
+        let program = DataflowProgram::compile_checked(elaborated(specification)).unwrap();
+        let mut monitor = DataflowMonitor::from_program(program);
+        let mut output = [Value::NoVal];
+        let row = input_row(&monitor, &[("s", Value::Str(text.into()))]);
+        monitor.evaluate(&row, &mut output).unwrap();
+        output[0].clone()
+    };
+    assert_eq!(
+        evaluate("in s: Str\nout y: Float\ny = dynamic(s: Float)", "1"),
+        Value::Float(1.0)
+    );
+    assert_eq!(
+        evaluate("in s: Str\nout y: Float\ny = dynamic(s: Float)", "2 * 3"),
+        Value::Float(6.0)
+    );
+    assert_eq!(
+        evaluate("in s: Str\nout y: Bool\ny = dynamic(s: Float) == 1.0", "1"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        evaluate("in s: Str\nout y: Int\ny = dynamic(s: Int)", "1"),
+        Value::Int(1)
+    );
+}
+
+fn evaluate_text_with_any_input(input: Value, text: &str) -> Result<[Value; 1], String> {
+    let program = DataflowProgram::compile_checked(elaborated(
+        "in x: Any\nin s: Str\nout y: Bool\ny = dynamic(s: Bool)",
+    ))
+    .unwrap();
+    let mut monitor = DataflowMonitor::from_program(program);
+    let mut output = [Value::NoVal];
+    let row = input_row(&monitor, &[("x", input), ("s", Value::Str(text.into()))]);
+    monitor
+        .evaluate(&row, &mut output)
+        .map(|_| output)
+        .map_err(|error| error.to_string())
+}
+
+/// Checking accepts an `Any` value at a concrete type on condition that it is
+/// checked as it runs, in text as in a specification.
+#[test]
+fn runtime_text_checks_an_any_value_where_it_is_used_at_a_concrete_type() {
+    assert_eq!(
+        evaluate_text_with_any_input(Value::Float(3.5), "trunc(x) > 0"),
+        Ok([Value::Bool(true)])
+    );
+    let refused = evaluate_text_with_any_input(Value::Int(3), "trunc(x) > 0").unwrap_err();
+    assert!(refused.contains("expected Float, got Int 3"), "{refused}");
+    assert!(refused.contains("<runtime expression>"), "{refused}");
+
+    let refused = evaluate_text_with_any_input(Value::Str("a".into()), "x + 1 > 0").unwrap_err();
+    assert!(refused.contains("expected Int"), "{refused}");
+}
+
+/// `trunc` takes a `Float`, and an `Int` is refused before anything runs,
+/// because a value of a declared type needs no check.
+#[test]
+fn runtime_text_applying_trunc_to_an_int_is_a_type_error() {
+    let program = DataflowProgram::compile_checked(elaborated(
+        "in x: Int\nin s: Str\nout y: Bool\ny = dynamic(s: Bool)",
+    ))
+    .unwrap();
+    let mut monitor = DataflowMonitor::from_program(program);
+    let mut output = [Value::NoVal];
+    let row = input_row(
+        &monitor,
+        &[
+            ("x", Value::Int(3)),
+            ("s", Value::Str("trunc(x) > 0".into())),
+        ],
+    );
+    let refused = monitor.evaluate(&row, &mut output).unwrap_err().to_string();
+    assert!(refused.contains("expected Float, got Int"), "{refused}");
+}

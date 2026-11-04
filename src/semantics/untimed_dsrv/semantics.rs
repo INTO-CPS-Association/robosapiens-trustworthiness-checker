@@ -576,6 +576,27 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn runtime_text_literal_takes_the_float_type_its_site_expects(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let elaborated =
+            crate::dsrv_fixtures::elaborated("in s: Str\nout y: Float\ny = dynamic(s: Float)");
+        let expression = elaborated.var_expr(&"y".into()).unwrap();
+        let input = Box::pin(futures::stream::iter([Value::Str("1".into())]));
+        let mut context = Context::<ValueConfig>::new(executor, vec!["s".into()], vec![input], 0);
+
+        let output =
+            <CheckedUntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::to_async_stream(
+                &expression,
+                &context,
+            );
+        context.run().await;
+        let values: Vec<Value> = output.collect::<Vec<_>>().await;
+
+        assert_eq!(values, [Value::Float(1.0)]);
+    }
+
+    #[apply(async_test)]
     async fn checked_float_default_repeats_known_values_across_no_val(
         executor: Rc<LocalExecutor<'static>>,
     ) {
