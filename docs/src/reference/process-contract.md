@@ -10,7 +10,7 @@ From a repository checkout:
 cargo run -- MODEL INPUT_SELECTION [OUTPUT_SELECTION]
 ```
 
-An installed binary has the same argument boundary without Cargo. `MODEL` is required and exactly one input selection is required. A finite `--input-file` run ends when the file is consumed. MQTT, Redis, Redis knowledge, ROS, and named live sources keep the process waiting for source items.
+An installed binary has the same argument boundary without Cargo. `MODEL` is required and exactly one input selection is required. An input file supplies a finite trace. MQTT, Redis, Redis knowledge, ROS, and named live sources keep the process waiting for source items.
 
 The current process has no separate readiness endpoint or healthcheck. Process existence proves neither that all routes opened nor that the first evaluation succeeded. For a supervisor, use an application-specific observation such as the first expected result or a selected log event.
 

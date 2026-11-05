@@ -144,7 +144,7 @@ was written. The runtime expression can use that module's aliases, constants,
 callable definitions, and language settings even after the original program
 has been dropped. An occurrence in an inlined library definition uses the
 library's context, while an occurrence written by the caller uses the caller's.
-The [DSRV syntax reference](../../reference/dsrv-syntax.md#type-aliases)
+The [DSRV syntax reference](../../reference/dsrv-types.md#type-aliases)
 describes alias resolution; [language settings](../../reference/dsrv-language-settings.md#experiments)
 describes the per-module settings.
 
