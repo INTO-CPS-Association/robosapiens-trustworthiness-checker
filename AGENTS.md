@@ -59,6 +59,7 @@
 
 # Documentation
 
+- Unless you have been explicitly asked by the user, do not automatically add standalone documentation for new features, or document new technical restrictions or caveats. Only automatically make corrections, update syntax/examples, or update reference-style tables, and keep any additions concise. Explicitly alert users if larger documentation changes seem necessary, rather than doing the changes autonomously. 
 - The book lives in `docs/`; build it with `cd docs && mdbook build`.
 - Figures are SVGs inlined with `{{#include ...svg}}`, which makes them raw HTML inside Markdown. Two CommonMark rules then decide whether a figure renders at all, and breaking either still builds a clean-looking page:
   - the `<svg ...>` open tag must sit on one line, or the figure is parsed as a paragraph and its labels spill onto the page as text;
