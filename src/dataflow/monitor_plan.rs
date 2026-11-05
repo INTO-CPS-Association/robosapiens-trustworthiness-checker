@@ -259,7 +259,6 @@ impl ReconfigurableExpressionPlan {
                     reason: "expression-source evaluation streams cannot contain reconfigurable expressions",
                 });
             }
-            debug_assert!(program.uses_static_evaluation());
         }
         let evaluation_order = (0..stream_count)
             .map(StreamId::new)

@@ -56,35 +56,21 @@ pub fn cast<D: CausalDomain>(
     input: LocalStream<CausalValue<D>>,
     target: crate::core::StreamType,
 ) -> LocalStream<CausalValue<D>> {
-    Box::pin(lift_base(input).map(move |input| {
+    let input = if matches!(
+        target,
+        crate::core::StreamType::Float | crate::core::StreamType::Str
+    ) {
+        lift_base(input)
+    } else {
+        input
+    };
+    Box::pin(input.map(move |input| {
         let value = match input.value {
             Value::NoVal => Value::NoVal,
             Value::Deferred => Value::Deferred,
             value => operations::cast(value, &target).unwrap_or_else(|error| panic!("{error}")),
         };
         marker(value, input.explanation)
-    }))
-}
-
-/// Pass `input` through unchanged, stopping the monitor at the first data
-/// value that is not a `target`. A failed evaluation panics here, so this
-/// does too, with the located message.
-pub fn check<D: CausalDomain>(
-    input: LocalStream<CausalValue<D>>,
-    target: crate::core::StreamType,
-    span: crate::lang::dsrv::span::Span,
-    location: crate::lang::dsrv::source_map::SourceLocation,
-) -> LocalStream<CausalValue<D>> {
-    Box::pin(input.map(move |input| {
-        if let Err(error) = crate::lang::dsrv::type_checker::check_runtime_value(
-            &input.value,
-            &target,
-            span,
-            &location,
-        ) {
-            panic!("{error}");
-        }
-        input
     }))
 }
 

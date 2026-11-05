@@ -10,7 +10,6 @@ use contiguous_tree::TreeCursorExt;
 
 use super::*;
 use crate::core::StreamType;
-use crate::lang::dsrv::TypeCheckOptions;
 use crate::lang::dsrv::ast::{AstShared, CheckedDsrvSpecification, DsrvSpecification, Expr};
 use crate::lang::dsrv::diagnostics::{SemanticError, SemanticWarning};
 use crate::lang::dsrv::modules::ModuleCollector;
@@ -92,9 +91,9 @@ fn at(label: &str, text: &str) -> Option<(String, String)> {
     Some((label.to_owned(), text.to_owned()))
 }
 
-// The library writes a warning fixture and a type error, each in a def.
+// The library writes a redundant cast and a type error, each in a def.
 const LIB: &str = "use experimental::{modules, functions}\n\
-    def tagged(n: Int) -> Str = \"warn:alpha\"\n\
+    def tagged(n: Int) -> Str = \"a\" as Str\n\
     def bad(n: Int) -> Int = n + true\n\
     def good(n: Int) -> Int = n * 2\n";
 
@@ -237,13 +236,13 @@ fn locations_are_presentation_rather_than_meaning() {
 // -----------------------------------------------------------------------------
 
 fn warnings_of(spec: DsrvSpecification) -> Vec<SemanticWarning> {
-    let (result, warnings) = spec.check(TypeCheckOptions::STRICT).into_parts();
+    let (result, warnings) = spec.check().into_parts();
     result.expect("the program checks");
     warnings
 }
 
 fn errors_of(spec: DsrvSpecification) -> Vec<SemanticError> {
-    spec.check(TypeCheckOptions::STRICT)
+    spec.check()
         .discard_warnings()
         .expect_err("the program does not check")
 }
@@ -259,7 +258,7 @@ fn a_finding_inlined_from_a_module_is_primary_at_the_call_with_a_definition_note
         primary_and_definition(warnings[0].location()),
         (
             at("root.dsrv", "lib::tagged(x)"),
-            at("lib.dsrv", "\"warn:alpha\"")
+            at("lib.dsrv", "\"a\" as Str")
         )
     );
     assert_eq!(
@@ -283,13 +282,13 @@ fn a_finding_in_an_argument_stays_with_the_caller() {
     let warnings = warnings_of(program(
         &format!(
             "{HEADER}mod lib\nuse lib\nin x: Int\nout y: Int\n\
-             y = lib::good(if \"warn:alpha\" == \"\" then x else x)\n"
+             y = lib::good(if \"a\" as Str == \"\" then x else x)\n"
         ),
         &[("lib", LIB)],
     ));
     assert_eq!(
         primary_and_definition(warnings[0].location()),
-        (at("root.dsrv", "\"warn:alpha\""), None)
+        (at("root.dsrv", "\"a\" as Str"), None)
     );
 }
 
@@ -311,11 +310,11 @@ fn each_call_site_is_primary_for_its_own_copy() {
         [
             (
                 at("root.dsrv", "lib::tagged(x)"),
-                at("lib.dsrv", "\"warn:alpha\"")
+                at("lib.dsrv", "\"a\" as Str")
             ),
             (
                 at("root.dsrv", "lib::tagged(x + 1)"),
-                at("lib.dsrv", "\"warn:alpha\"")
+                at("lib.dsrv", "\"a\" as Str")
             ),
         ]
     );
@@ -334,7 +333,7 @@ fn code_reached_through_several_modules_names_the_module_that_wrote_it() {
             (
                 "mid::leaf",
                 "use experimental::{modules, functions}\n\
-                 def tagged(n: Int) -> Str = \"warn:alpha\"\n",
+                 def tagged(n: Int) -> Str = \"a\" as Str\n",
             ),
         ],
     ));
@@ -342,7 +341,7 @@ fn code_reached_through_several_modules_names_the_module_that_wrote_it() {
         primary_and_definition(warnings[0].location()),
         (
             at("root.dsrv", "mid::relay(x)"),
-            at("mid::leaf.dsrv", "\"warn:alpha\"")
+            at("mid::leaf.dsrv", "\"a\" as Str")
         )
     );
 }
@@ -351,14 +350,14 @@ fn code_reached_through_several_modules_names_the_module_that_wrote_it() {
 fn a_def_of_the_root_file_is_located_in_that_file_without_a_note() {
     let warnings = warnings_of(
         format!(
-            "{HEADER}def tagged(n: Int) -> Str = \"warn:alpha\"\nin x: Int\nout y: Str\ny = tagged(x)\n"
+            "{HEADER}def tagged(n: Int) -> Str = \"a\" as Str\nin x: Int\nout y: Str\ny = tagged(x)\n"
         )
         .parse::<DsrvSpecification>()
         .unwrap(),
     );
     assert_eq!(
         primary_and_definition(warnings[0].location()),
-        (at(STRING_LABEL, "\"warn:alpha\""), None)
+        (at(STRING_LABEL, "\"a\" as Str"), None)
     );
 }
 
@@ -512,7 +511,7 @@ fn a_failed_report_keeps_its_files_after_the_program_and_either_part_is_dropped(
     let root = file_probe(&spec, "root.dsrv");
     let lib = file_probe(&spec, "lib.dsrv");
     let other = file_probe(&spec, "other.dsrv");
-    let report = spec.check(TypeCheckOptions::STRICT);
+    let report = spec.check();
     let (result, warnings) = report.into_parts();
     let errors = result.expect_err("bad does not check");
     assert!(
@@ -534,13 +533,13 @@ fn a_failed_report_keeps_its_files_after_the_program_and_either_part_is_dropped(
 fn the_warnings_of_a_failed_report_render_after_its_errors_are_dropped() {
     let spec = program(WARNED_AND_FAILED, &[("lib", LIB), ("other", OTHER)]);
     let lib = file_probe(&spec, "lib.dsrv");
-    let (result, warnings) = spec.check(TypeCheckOptions::STRICT).into_parts();
+    let (result, warnings) = spec.check().into_parts();
     drop(result);
     assert_eq!(
         primary_and_definition(warnings[0].location()),
         (
             at("root.dsrv", "lib::tagged(x)"),
-            at("lib.dsrv", "\"warn:alpha\"")
+            at("lib.dsrv", "\"a\" as Str")
         )
     );
     drop(warnings);
@@ -554,15 +553,13 @@ fn a_successful_report_keeps_its_warnings_files_after_the_checked_program_is_dro
         &[("lib", LIB)],
     );
     let lib = file_probe(&spec, "lib.dsrv");
-    let (checked, warnings) = spec
-        .check_and_elaborate(TypeCheckOptions::GRADUAL)
-        .into_parts();
+    let (checked, warnings) = spec.check_and_elaborate().into_parts();
     drop(checked.expect("checks"));
     let strong = lib.strong_count();
     assert_eq!(strong, 1, "only the warning's definition site holds lib");
     assert_eq!(
         named(warnings[0].location().definition()),
-        at("lib.dsrv", "\"warn:alpha\"")
+        at("lib.dsrv", "\"a\" as Str")
     );
 }
 
@@ -587,10 +584,7 @@ fn nodes_and_checked_forms_share_one_archive_without_holding_files() {
         "nodes hold IDs, not files"
     );
 
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let checked_roots = (0..8)
         .map(|_| elaborated.var_expr(&VarName::new("y")).unwrap())
         .collect::<Vec<_>>();
@@ -617,10 +611,7 @@ fn elaboration_keeps_every_nodes_origin() {
         &format!("{HEADER}mod lib\nuse lib\nin x: Int\nout y: Int\ny = lib::good(x) + x\n"),
         &[("lib", LIB)],
     );
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let before = elaborated
         .source()
         .unchecked()
@@ -664,10 +655,7 @@ fn prepared_site(
 fn a_site_captures_its_own_file_and_its_callable_files_only() {
     let spec = program(DYNAMIC_ROOT, &[("lib", LIB), ("types", TYPES)]);
     let types = file_probe(&spec, "types.dsrv");
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let site = prepared_site(&elaborated);
     drop(elaborated);
     assert!(types.upgrade().is_none(), "no site needs the types module");
@@ -682,10 +670,7 @@ fn a_site_captures_its_own_file_and_its_callable_files_only() {
 #[test]
 fn runtime_expression_errors_own_their_files_after_the_program_is_dropped() {
     let spec = program(DYNAMIC_ROOT, &[("lib", LIB), ("types", TYPES)]);
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let site = prepared_site(&elaborated);
     drop(elaborated);
 
@@ -706,10 +691,7 @@ fn runtime_expression_errors_own_their_files_after_the_program_is_dropped() {
 
     // Text calling nothing is still located in itself.
     let spec = program(DYNAMIC_ROOT, &[("lib", LIB), ("types", TYPES)]);
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let error = prepared_site(&elaborated)
         .parse_and_check("x + true")
         .expect_err("ill-typed");
@@ -729,10 +711,7 @@ fn runtime_expression_errors_own_their_files_after_the_program_is_dropped() {
 fn sites_nested_in_runtime_expression_source_capture_that_source() {
     let spec = program(DYNAMIC_ROOT, &[("lib", LIB), ("types", TYPES)]);
     let lib = file_probe(&spec, "lib.dsrv");
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let outer = prepared_site(&elaborated);
     drop(elaborated);
     let accepted = outer
@@ -773,10 +752,7 @@ fn sites_nested_in_runtime_expression_source_capture_that_source() {
 #[test]
 fn a_site_is_equal_to_the_same_site_captured_elsewhere() {
     let spec = program(DYNAMIC_ROOT, &[("lib", LIB), ("types", TYPES)]);
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let site = prepared_site(&elaborated);
     let uncaptured = site.without_sources();
     assert!(uncaptured.sources().is_none());
@@ -790,10 +766,7 @@ fn a_site_is_equal_to_the_same_site_captured_elsewhere() {
 
 /// What the dataflow descriptor records of the `dynamic` node's site.
 fn semantic_identity(spec: DsrvSpecification) -> String {
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let site = prepared_site(&elaborated);
     let mut described = serde_json::to_string(site.context().fingerprint()).unwrap();
     site.callable().describe(&mut described);
@@ -865,7 +838,7 @@ static_assertions::assert_impl_all!(RuntimeExpressionSite: Send, Sync);
 #[test]
 fn findings_render_on_another_thread_after_the_program_is_dropped() {
     let spec = program(WARNED_AND_FAILED, &[("lib", LIB), ("other", OTHER)]);
-    let (result, warnings) = spec.check(TypeCheckOptions::STRICT).into_parts();
+    let (result, warnings) = spec.check().into_parts();
     let errors = result.expect_err("bad does not check");
     let rendered = std::thread::spawn(move || {
         (
@@ -876,17 +849,14 @@ fn findings_render_on_another_thread_after_the_program_is_dropped() {
     .join()
     .unwrap();
     assert_eq!(rendered.0.0, at("root.dsrv", "lib::bad(x)"));
-    assert_eq!(rendered.1.1, at("lib.dsrv", "\"warn:alpha\""));
+    assert_eq!(rendered.1.1, at("lib.dsrv", "\"a\" as Str"));
 }
 
 #[cfg(feature = "thread-safe-ast")]
 #[test]
 fn a_prepared_site_accepts_text_on_another_thread_after_the_program_is_dropped() {
     let spec = program(DYNAMIC_ROOT, &[("lib", LIB), ("types", TYPES)]);
-    let elaborated = spec
-        .check_and_elaborate(TypeCheckOptions::STRICT)
-        .without_warnings()
-        .unwrap();
+    let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
     let site = prepared_site(&elaborated);
     drop(elaborated);
     let label = std::thread::spawn(move || {
@@ -908,11 +878,7 @@ fn a_prepared_site_accepts_text_on_another_thread_after_the_program_is_dropped()
 
 #[test]
 fn checked_specifications_of_labelled_text_are_located() {
-    let report = CheckedDsrvSpecification::parse_with(
-        "in x: Int\nout y: Int\ny = x as Int",
-        TypeCheckOptions::STRICT,
-    )
-    .unwrap();
+    let report = CheckedDsrvSpecification::parse("in x: Int\nout y: Int\ny = x as Int").unwrap();
     let (_, warnings) = report.into_parts();
     assert_eq!(
         named(warnings[0].location().primary()),

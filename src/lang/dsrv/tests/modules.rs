@@ -10,8 +10,10 @@ use crate::VarName;
 use crate::lang::dsrv::LanguageError;
 use crate::lang::dsrv::ast::{DsrvSpecification, ExprView};
 use crate::lang::dsrv::parser::{DsrvParseError, parse_str};
-use crate::lang::dsrv::path::{ModuleName, TypePath};
+use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, TypePath, UseTree};
 use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
+use crate::lang::dsrv::source::SourceResolveError;
+use crate::lang::dsrv::syntax::{ParsedDeclaration, parse_specification};
 
 use test_log::test;
 
@@ -68,7 +70,7 @@ fn language_error(source: &str) -> LanguageError {
     }
 }
 
-const BODY: &str = "in x: Int\nout y: Any\n";
+const BODY: &str = "in x: Int\nout y\n";
 
 #[test]
 fn a_local_qualifier_still_has_no_module() {
@@ -165,9 +167,6 @@ fn a_local_qualifier_does_not_need_the_modules_experiment() {
 // ---------------------------------------------------------------------------
 // `use`: the path and the tree that follows it
 // ---------------------------------------------------------------------------
-
-use crate::lang::dsrv::path::{ImportKind, PathSegment, UseTree};
-use crate::lang::dsrv::syntax::{ParsedDeclaration, parse_specification};
 
 /// Every `use` in a file, as it was written.
 fn imports(source: &str) -> Vec<UseTree> {
@@ -327,7 +326,7 @@ fn an_unknown_experiment_is_still_named_in_the_error() {
 /// a line is the header form, so this is not read as an item import.
 #[test]
 fn an_experiment_may_be_named_without_a_group() {
-    parse_str("use experimental::tagged_unions\nin x: Int\nout y: Any\ny = State::Moving(x)\n")
+    parse_str("use experimental::tagged_unions\nin x: Int\nout y\ny = State::Moving(x)\n")
         .expect("unbraced experiment");
 }
 
@@ -440,8 +439,6 @@ fn a_module_declaration_may_precede_an_item_import() {
 // ---------------------------------------------------------------------------
 // Qualified names in type position
 // ---------------------------------------------------------------------------
-
-use crate::lang::dsrv::source::SourceResolveError;
 
 fn resolve_error(source: &str) -> SourceResolveError {
     let source = format!("{HEADER}{source}");
@@ -725,7 +722,7 @@ fn a_module_item_and_a_constructor_qualifier_are_told_apart() {
     // `a::b` is an item; `a::B::C` keeps the qualifier list going.
     for source in [
         "use experimental::{modules, functions}\nin x: Int\nout y: Int\ny = lib::inner::twice(x)\n",
-        "use experimental::{modules, tagged_unions}\nin x: Int\nout y: Any\ny = lib::inner::Colour::Red\n",
+        "use experimental::{modules, tagged_unions}\nin x: Int\nout y\ny = lib::inner::Colour::Red\n",
     ] {
         parse_specification(source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }

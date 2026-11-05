@@ -1,12 +1,10 @@
 //! Environments for expressions supplied at run time to `dynamic` and `defer`.
 //!
-//! Checked runtime paths check such source when it arrives and refuse source
-//! that does not check, whether evaluation then consults the types or not. The
-//! intentionally unchecked causal path parses and admits the source without
-//! adding type checking. In both cases, source is parsed in the context of the
-//! node it was supplied to and may call the same defs the module that wrote
-//! that node could. Checked paths use the type and environment elaboration
-//! gave that node. For a node inlined from a library's def, that is the
+//! Every runtime checks such source when it arrives and refuses source that
+//! does not check, whether evaluation then consults the types or not. Source
+//! is parsed in the context of the node it was supplied to and may call the
+//! same defs the module that wrote that node could. Checking uses the concrete
+//! type and environment elaboration gave that node. For a node inlined from a library's def, that is the
 //! library's context and defs, not its caller's.
 //!
 //! Checked text is elaborated before it runs, as a specification is, so a
@@ -23,11 +21,13 @@
 //! it in turn. The capture is not part of what a site means: two sites that
 //! differ only in where they were written accept text identically.
 
-use std::collections::{BTreeMap, BTreeSet};
-
+#[cfg(test)]
 use contiguous_tree::TreeCursorExt;
 
-use crate::core::{RuntimeCapabilities, StreamType, UnsupportedRuntimeConstruct};
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::core::StreamType;
+use crate::core::{RuntimeCapabilities, UnsupportedRuntimeConstruct};
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprArena, ExprKind, ExprRef};
 use crate::lang::dsrv::diagnostics::SemanticErrors;
 use crate::lang::dsrv::expand::functions::Callable;
@@ -36,16 +36,14 @@ use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::source_map::{
     NodeOrigin, RUNTIME_EXPRESSION_LABEL, SourceArchive, SourceFile, SourceId, SourceLabel,
 };
-use crate::lang::dsrv::type_checker::{
-    StreamTypeEnvironment, TCType, check_and_elaborate_expression,
-};
+use crate::lang::dsrv::type_checker::{StreamTypes, check_and_elaborate_expression};
 
 /// The type and environment runtime expression source is checked against: what elaboration
 /// gave the `dynamic` or `defer` node the text was supplied to.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RuntimeExpressionTyping {
-    pub(crate) environment: AstShared<StreamTypeEnvironment>,
-    pub(crate) expected: TCType,
+    pub(crate) environment: AstShared<StreamTypes>,
+    pub(crate) expected: StreamType,
 }
 
 /// How text supplied to one `dynamic` or `defer` node is accepted.
@@ -54,10 +52,7 @@ pub(crate) struct RuntimeExpressionSite {
     context: AstShared<SourceContext>,
     /// The defs the node's file could call, which its text may call too.
     callable: AstShared<Callable>,
-    /// `None` only where no elaborated node stands behind the text: an
-    /// expression built directly by a test, or one nested inside text that is
-    /// itself evaluated without types. Such text is checked with every
-    /// variable it mentions, and its result, of type `Any`.
+    /// Absent only for internal unchecked syntax. Executable source requires typing.
     typing: Option<RuntimeExpressionTyping>,
     /// The files text supplied here may need to be located. `None` where
     /// no archive stood behind the site, whose text is then unlocated.
@@ -93,7 +88,7 @@ impl UntypedExpr {
     }
 
     pub(crate) fn site(&self, node: ExprRef<'_>) -> RuntimeExpressionSite {
-        self.sites.site(node).untyped()
+        self.sites.site(node).clone()
     }
 
     pub(crate) fn sites(&self) -> &AstShared<RuntimeExpressionSites> {
@@ -115,6 +110,8 @@ pub(crate) enum RuntimeExpressionError {
         text: String,
         errors: SemanticErrors,
     },
+    #[error("runtime expression {text:?} has no concrete checking environment")]
+    MissingTyping { text: String },
     #[error("runtime expression {text:?} is unsupported: {error}")]
     Unsupported {
         text: String,
@@ -169,13 +166,6 @@ impl RuntimeExpressionSite {
         )
     }
 
-    pub(crate) fn untyped(&self) -> Self {
-        Self {
-            typing: None,
-            ..self.clone()
-        }
-    }
-
     pub(crate) fn context(&self) -> &SourceContext {
         &self.context
     }
@@ -228,6 +218,7 @@ impl RuntimeExpressionSite {
         Ok((expr, located.map(|(archive, _)| archive)))
     }
 
+    #[cfg(test)]
     pub(crate) fn parse_unchecked(
         &self,
         text: &str,
@@ -248,25 +239,14 @@ impl RuntimeExpressionSite {
         expr: Expr,
         sources: Option<&SourceArchive>,
     ) -> Result<CheckedExpr, RuntimeExpressionError> {
-        let checked = match &self.typing {
-            Some(typing) => {
-                check_and_elaborate_expression(expr, &typing.expected, &typing.environment, sources)
-            }
-            None => {
-                let environment = expr
-                    .as_ref()
-                    .free_variables()
-                    .into_iter()
-                    .map(|name| (name, StreamType::Any))
-                    .collect::<BTreeMap<_, _>>();
-                check_and_elaborate_expression(
-                    expr,
-                    &TCType::Any,
-                    &AstShared::new(environment),
-                    sources,
-                )
-            }
-        };
+        let typing = self
+            .typing
+            .as_ref()
+            .ok_or_else(|| RuntimeExpressionError::MissingTyping {
+                text: text.to_owned(),
+            })?;
+        let checked =
+            check_and_elaborate_expression(expr, &typing.expected, &typing.environment, sources);
         // Runtime expression source has nowhere to present warnings.
         checked
             .discard_warnings()
@@ -297,6 +277,7 @@ impl RuntimeExpressionSite {
         Ok(checked)
     }
 
+    #[cfg(test)]
     pub(crate) fn parse_unchecked_for(
         &self,
         text: &str,

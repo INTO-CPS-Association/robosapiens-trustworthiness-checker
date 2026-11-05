@@ -164,6 +164,14 @@ fn dynamic_program_with_variables(
     prefix_nodes: usize,
     variable_names: &[&str],
 ) -> Rc<StreamProgram> {
+    dynamic_program_with_result(prefix_nodes, variable_names, crate::core::StreamType::Int)
+}
+
+fn dynamic_program_with_result(
+    prefix_nodes: usize,
+    variable_names: &[&str],
+    expected: crate::core::StreamType,
+) -> Rc<StreamProgram> {
     let variables = variable_names
         .iter()
         .map(|name| VarName::new(*name))
@@ -175,7 +183,7 @@ fn dynamic_program_with_variables(
             allowed_variables: variables.into_iter().collect(),
         },
         kind: ReconfigurableExpressionKind::Dynamic,
-        site: crate::lang::dsrv::runtime_expression::RuntimeExpressionSite::default(),
+        site: source_site(variable_names, expected),
         specialise: false,
     };
     let mut nodes = (0..prefix_nodes)
@@ -310,8 +318,18 @@ fn revised_operators_work_through_dynamic_reconfiguration() {
         Value::Int(27)
     );
 
+    let mut comparison = Evaluator::new(dynamic_program_with_result(
+        0,
+        &["x"],
+        crate::core::StreamType::Bool,
+    ));
+    reconfigure(
+        &mut comparison,
+        "x == x",
+        ContextTransferPolicy::MatchingStreamState,
+    );
     let (activation, _) = reconfigure(
-        &mut evaluator,
+        &mut comparison,
         "x != x",
         ContextTransferPolicy::MatchingStreamState,
     );
@@ -320,23 +338,42 @@ fn revised_operators_work_through_dynamic_reconfiguration() {
         ReconfigurableExpressionActivation::Replaced { .. }
     ));
     assert_eq!(
-        evaluate_active_dynamic_body(&mut evaluator, 3),
+        evaluate_active_dynamic_body(&mut comparison, 3),
         Value::Bool(false)
     );
 
-    // An untyped dynamic source is compiled, then follows the normal arithmetic
-    // error path when its runtime exponent is negative.
-    reconfigure(
-        &mut evaluator,
-        "x ** -1",
-        ContextTransferPolicy::MatchingStreamState,
+    // A statically negative integer exponent is refused at source admission;
+    // the body already installed at this concrete Int site remains usable.
+    let mut cache = SharedReconfigurableExpressionCache::default();
+    let error = evaluator
+        .reconfigure_expression(
+            NodeId::new(0),
+            Value::Str("x ** -1".into()),
+            ContextTransferPolicy::MatchingStreamState,
+            &mut cache,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::dataflow::DataflowEvaluationError::ReconfigurableExpressionType { .. }
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("integer exponent must be non-negative")
     );
+    assert_eq!(
+        evaluate_active_dynamic_body(&mut evaluator, 3),
+        Value::Int(27)
+    );
+
+    // The admitted x ** x body still checks its actual exponent at execution.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        evaluate_active_dynamic_body(&mut evaluator, 3)
+        evaluate_active_dynamic_body(&mut evaluator, -1)
     }));
     assert!(
         result.is_err(),
-        "dynamic negative exponent must terminate evaluation"
+        "a runtime negative exponent must terminate evaluation"
     );
 }
 
@@ -546,4 +583,24 @@ fn invalid_nested_expression_reconfiguration_is_atomic_for_the_live_state() {
             .template,
         &template_before
     ));
+}
+
+fn source_site(
+    names: &[&str],
+    expected: crate::core::StreamType,
+) -> crate::lang::dsrv::runtime_expression::RuntimeExpressionSite {
+    use crate::core::StreamType;
+    use crate::lang::dsrv::runtime_expression::RuntimeExpressionTyping;
+    crate::lang::dsrv::runtime_expression::RuntimeExpressionSite::new(
+        Default::default(),
+        Default::default(),
+        Some(RuntimeExpressionTyping {
+            environment: names
+                .iter()
+                .map(|name| (crate::VarName::new(*name), StreamType::Int))
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into(),
+            expected,
+        }),
+    )
 }

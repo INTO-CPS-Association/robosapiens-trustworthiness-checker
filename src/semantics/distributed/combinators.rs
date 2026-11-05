@@ -55,6 +55,23 @@ where
 
 #[cfg(test)]
 mod tests {
+    fn int_source_site(names: &[&str]) -> RuntimeExpressionSite {
+        use crate::core::StreamType;
+        use crate::lang::dsrv::runtime_expression::RuntimeExpressionTyping;
+        RuntimeExpressionSite::new(
+            Default::default(),
+            Default::default(),
+            Some(RuntimeExpressionTyping {
+                environment: names
+                    .iter()
+                    .map(|name| (crate::VarName::new(*name), StreamType::Int))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+                    .into(),
+                expected: StreamType::Int,
+            }),
+        )
+    }
+
     use std::{collections::BTreeMap, rc::Rc};
 
     use super::*;
@@ -98,7 +115,7 @@ mod tests {
             e,
             ReconfigurableExprScope::Automatic,
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;

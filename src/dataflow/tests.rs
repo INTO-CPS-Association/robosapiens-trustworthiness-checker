@@ -24,7 +24,7 @@ use crate::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
 use crate::runtime::dataflow::DataflowRuntimeBuilder;
 use crate::runtime::semi_sync::SemiSyncRuntimeBuilder;
 use crate::semantics::UntimedDsrvSemantics;
-use crate::{DsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions, async_test};
+use crate::{DsrvSpecification, ElaboratedDsrvSpecification, async_test};
 use crate::{
     core::{InputUpdate, LocalStream, Runtime},
     semantics::{MonitoringSemantics, StreamContext},
@@ -228,7 +228,7 @@ fn arb_specialized_runtime_program_and_inputs()
                     annotations,
                     Vec::new(),
                 )
-                .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .check_and_elaborate()
                 .without_warnings()
                 .expect("generated specification must check"),
                 rows,
@@ -352,14 +352,16 @@ proptest! {
     /// `DataflowCompilationError` is a valid result.
     #[test]
     fn dataflow_compilation_is_total(spec in arb_boolean_dsrv_spec()) {
-        if let Ok(spec) = spec.check_and_elaborate(TypeCheckOptions::GRADUAL).without_warnings() {
-            let _ = DataflowMonitor::compile_checked(spec);
-        }
+        prop_assert!(!spec.output_vars.is_empty(), "concrete generator supplies compiler roots");
+        let spec = spec.check_and_elaborate().without_warnings()
+            .expect("every generated concrete Boolean specification must check");
+        DataflowMonitor::compile_checked(spec)
+            .expect("every generated acyclic Boolean specification must compile");
     }
 
     #[test]
     fn dataflow_compilation_without_types_is_total(spec in arb_dsrv_spec()) {
-        if let Ok(spec) = spec.check_and_elaborate(TypeCheckOptions::GRADUAL).into_parts().0 {
+        if let Ok(spec) = spec.check_and_elaborate().into_parts().0 {
             let _ = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed);
         }
     }
@@ -370,7 +372,7 @@ proptest! {
     ) {
         let typed_spec = spec
             .clone()
-            .check_and_elaborate(TypeCheckOptions::STRICT)
+            .check_and_elaborate()
 .without_warnings()
             .expect("generated specification must type check");
         let mut augmented_spec = spec.clone();
@@ -392,11 +394,11 @@ proptest! {
             augmented_spec.aux_vars,
         );
         let spec = spec
-            .check_and_elaborate(TypeCheckOptions::GRADUAL)
+            .check_and_elaborate()
 .without_warnings()
             .expect("generated specification must check");
         let augmented_spec = augmented_spec
-            .check_and_elaborate(TypeCheckOptions::GRADUAL)
+            .check_and_elaborate()
 .without_warnings()
             .expect("augmented specification must check");
         let mut monitors = [
@@ -584,13 +586,8 @@ fn eval_dataflow_spec(
     rows
 }
 
-fn eval_dataflow(src: &str, vars: Vec<(&str, Vec<Value>)>) -> Vec<Value> {
-    let spec_src = vars
-        .iter()
-        .map(|(name, _)| format!("in {name}"))
-        .chain(["out result".to_owned(), format!("result = {src}")])
-        .collect::<Vec<_>>()
-        .join("\n");
+fn eval_dataflow(input_declarations: &str, src: &str, vars: Vec<(&str, Vec<Value>)>) -> Vec<Value> {
+    let spec_src = format!("{input_declarations}\nout result = {src}");
     let spec = elaborated(spec_src.as_str());
     let inputs = vars
         .into_iter()
@@ -604,11 +601,12 @@ fn eval_dataflow(src: &str, vars: Vec<(&str, Vec<Value>)>) -> Vec<Value> {
 
 async fn assert_matches_current(
     executor: Rc<LocalExecutor<'static>>,
+    input_declarations: &str,
     src: &str,
     vars: Vec<(&str, Vec<Value>)>,
 ) {
     let expected = eval_untimed(executor.clone(), src, vars.clone()).await;
-    let actual = eval_dataflow(src, vars);
+    let actual = eval_dataflow(input_declarations, src, vars);
     assert_eq!(actual, expected, "dataflow differed for `{src}`");
 }
 
@@ -1099,29 +1097,8 @@ fn dynamic_no_val_source_and_dependency_reuse_retained_outer_values() {
 }
 
 #[test]
-fn failed_function_application_is_an_evaluation_error() {
-    // Checking rejects a visible arity mismatch, so the runtime check is reached
-    // through a function supplied at run time and is therefore `Any`.
-    let spec = elaborated("in x\nin source: Str\naux f\nout z\nf = dynamic(source)\nz = f(x, x)");
-    let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
-    let mut output = vec![Value::NoVal; monitor.output_vars().len()];
-    let row = runtime_input_row(
-        &monitor,
-        &[
-            ("x", Value::Int(1)),
-            ("source", Value::Str("\\a: Int -> a".into())),
-        ],
-    );
-    let error = monitor.evaluate(&row, &mut output).unwrap_err().to_string();
-    assert!(
-        error.contains("Function expected 1 arguments, got 2"),
-        "{error}"
-    );
-}
-
-#[test]
 fn dataflow_delay_state_persists_across_evaluations() {
-    let spec = elaborated("in x\nout z\nz = default(z[3], 0) + x");
+    let spec = elaborated("in x: Int\nout z: Int\nz = default(z[3], 0) + x");
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
 
     assert_eq!(
@@ -1136,7 +1113,7 @@ fn dataflow_delay_state_persists_across_evaluations() {
 
 #[test]
 fn dataflow_state_is_shared_between_event_and_row_evaluation() {
-    let spec = elaborated("in x\nout z\nz = default(z[1], 0) + x");
+    let spec = elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x");
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
 
     assert_eq!(
@@ -1154,7 +1131,7 @@ fn dataflow_state_is_shared_between_event_and_row_evaluation() {
 
 #[test]
 fn dataflow_input_and_output_counts_are_validated() {
-    let spec = elaborated("in x\nin y\nout z\nz = y");
+    let spec = elaborated("in x: Int\nin y: Int\nout z\nz = y");
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
 
     let missing = [Value::Int(1)];
@@ -1228,7 +1205,7 @@ fn interleaved_statement_order_keeps_positional_io_separate_from_dependencies() 
 
 #[test]
 fn dataflow_compilation_reports_computed_dependency_cycles() {
-    let spec = elaborated("in x\nout z\naux a\naux b\na = b + x\nb = a + x\nz = a");
+    let spec = elaborated("in x: Int\nout z\naux a: Int\naux b: Int\na = b + x\nb = a + x\nz = a");
 
     let error = match DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed) {
         Ok(_) => panic!("computed dependency cycle should be rejected"),
@@ -1247,7 +1224,7 @@ fn checking_reports_unavailable_variables_before_dataflow_compiles() {
     let errors = source
         .parse::<DsrvSpecification>()
         .unwrap()
-        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .check_and_elaborate()
         .without_warnings()
         .expect_err("undeclared input should be rejected by checking");
 
@@ -1263,32 +1240,8 @@ fn checking_reports_unavailable_variables_before_dataflow_compiles() {
 }
 
 #[test]
-fn dataflow_preserves_runtime_checks_for_function_result_ascriptions() {
-    let specification = "use experimental::functions\n\
-        in x: Any\nout y: Bool\ndef f(x: Any) -> Bool = x\ny = f(x)"
-        .parse::<DsrvSpecification>()
-        .unwrap()
-        .check_and_elaborate(TypeCheckOptions::GRADUAL)
-        .without_warnings()
-        .unwrap();
-    let mut valid = DataflowMonitor::compile_checked(specification.clone()).unwrap();
-    let mut output = [Value::NoVal];
-    valid.evaluate(&[Value::Bool(true)], &mut output).unwrap();
-    assert_eq!(output, [Value::Bool(true)]);
-
-    let mut invalid = DataflowMonitor::compile_checked(specification).unwrap();
-    assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            invalid.evaluate(&[Value::Int(7)], &mut output).unwrap();
-        }))
-        .is_err(),
-        "the declared Bool result must reject an Int at run time"
-    );
-}
-
-#[test]
 fn dataflow_compiles_elaborated_models_and_checking_refuses_invalid_ones() {
-    let valid = elaborated("in x\nout y\ny = x + 1");
+    let valid = elaborated("in x: Int\nout y\ny = x + 1");
     let program = DataflowProgram::compile_with_semantics(valid.clone(), Semantics::Untimed)
         .expect("program without consulting types");
     assert_eq!(program.input_vars(), &[VarName::new("x")]);
@@ -1302,7 +1255,7 @@ fn dataflow_compiles_elaborated_models_and_checking_refuses_invalid_ones() {
     // dataflow, whichever evaluation strategy would run it.
     let invalid_sources = [
         "out y: Bool\ny = 1",
-        "in x\nin x\nout y\ny = x",
+        "in x: Int\nin x: Int\nout y\ny = x",
         "out y\ny = missing",
         "in source: Str\nout y\ny = dynamic(source: Int, {missing})",
     ];
@@ -1311,7 +1264,7 @@ fn dataflow_compiles_elaborated_models_and_checking_refuses_invalid_ones() {
             source
                 .parse::<DsrvSpecification>()
                 .map_or(true, |specification| specification
-                    .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                    .check_and_elaborate()
                     .without_warnings()
                     .is_err()),
             "{source} must be refused before it can be compiled"
@@ -1343,7 +1296,7 @@ fn proof_consuming_compilers_skip_repeated_admission_and_typechecking() {
     let specification = elaborated(source);
     assert_eq!(
         crate::lang::dsrv::test_pipeline_counts(),
-        (1, 0, 1),
+        (1, 1),
         "elaboration parses and checks once"
     );
 
@@ -1361,7 +1314,7 @@ fn proof_consuming_compilers_skip_repeated_admission_and_typechecking() {
         );
         assert_eq!(
             crate::lang::dsrv::test_pipeline_counts(),
-            (1, 0, 1),
+            (1, 1),
             "consuming an elaborated specification must not check it again"
         );
     }
@@ -1378,7 +1331,7 @@ fn static_noval_is_refused_by_checking() {
         [],
     );
     let errors = specification
-        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .check_and_elaborate()
         .without_warnings()
         .expect_err("static NoVal is not a source literal");
     assert!(errors.iter().any(|error| matches!(
@@ -1390,7 +1343,7 @@ fn static_noval_is_refused_by_checking() {
 
 #[test]
 fn dataflow_rejects_unguarded_recursive_output() {
-    let spec = elaborated("in x\nout z\nz = z + x");
+    let spec = elaborated("in x: Int\nout z: Int\nz = z + x");
     let error = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
         .err()
         .expect("unguarded recursion should be rejected");
@@ -1403,7 +1356,7 @@ fn dataflow_rejects_unguarded_recursive_output() {
 
 #[test]
 fn dataflow_rejects_direct_recursive_output() {
-    let spec = elaborated("out z\nz = z");
+    let spec = elaborated("out z: Int\nz = z");
     let error = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
         .err()
         .expect("direct recursion should be rejected");
@@ -1416,7 +1369,7 @@ fn dataflow_rejects_direct_recursive_output() {
 
 #[test]
 fn dataflow_rejects_recursive_branch_output() {
-    let spec = elaborated("in choose\nout z\nz = if choose then z else 0");
+    let spec = elaborated("in choose: Bool\nout z: Int\nz = if choose then z else 0");
     let error = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
         .err()
         .expect("recursive branch output should be rejected");
@@ -1429,7 +1382,7 @@ fn dataflow_rejects_recursive_branch_output() {
 
 #[test]
 fn dataflow_rejects_recursive_function_capture() {
-    let spec = elaborated("out z\nz = (\\v: Int -> z)(1)");
+    let spec = elaborated("out z: Int\nz = (\\v: Int -> z)(1)");
     let error = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
         .err()
         .expect("recursive function capture should be rejected");
@@ -2027,6 +1980,7 @@ fn checked_dataflow_nested_reconfiguration_poisons_the_monitor() {
 async fn dataflow_matches_arithmetic(executor: Rc<LocalExecutor<'static>>) {
     assert_matches_current(
         executor,
+        "in x: Int\nin y: Int",
         "(x + y) * 2 - 1",
         vec![
             ("x", vec![1.into(), 2.into(), 3.into(), 4.into()]),
@@ -2255,6 +2209,7 @@ fn dataflow_builds_union_values_lifting_the_payload() {
 async fn dataflow_lifts_sparse_binary_inputs_across_rows(executor: Rc<LocalExecutor<'static>>) {
     assert_matches_current(
         executor,
+        "in x: Int\nin y: Int",
         "x + y",
         vec![
             (
@@ -2306,7 +2261,9 @@ fn dataflow_event_batch_matches_sparse_rows_for_recursive_sum() {
 
 #[test]
 fn dataflow_lazy_if_propagates_initial_no_val_from_either_branch() {
-    let spec = elaborated("in flag\nin good\nin bad\nout z\nz = if flag then good else bad");
+    let spec = elaborated(
+        "in flag: Bool\nin good: Int\nin bad: Int\nout z\nz = if flag then good else bad",
+    );
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
     let inputs_by_var = BTreeMap::from([
         (
@@ -2329,7 +2286,7 @@ fn dataflow_lazy_if_propagates_initial_no_val_from_either_branch() {
 
 #[test]
 fn dataflow_lazy_if_reads_inputs_at_the_outer_tick() {
-    let spec = elaborated("in flag\nin x\nout z\nz = if flag then x else 0");
+    let spec = elaborated("in flag: Bool\nin x: Int\nout z\nz = if flag then x else 0");
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
 
     assert_eq!(
@@ -2363,8 +2320,8 @@ fn dataflow_rejects_reconfigurable_expressions_in_dynamic_lazy_branches() {
 #[test]
 fn dataflow_lazy_if_allows_recursive_function_base_case() {
     let spec = elaborated(
-        "in n\n\
-                        in bias\n\
+        "in n: Int\n\
+                        in bias: Int\n\
                         out z\n\
                         z = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)",
     );
@@ -2397,6 +2354,7 @@ fn dataflow_lazy_if_allows_recursive_function_base_case() {
 async fn dataflow_matches_comparison_and_if(executor: Rc<LocalExecutor<'static>>) {
     assert_matches_current(
         executor,
+        "in x: Int\nin y: Int",
         "if x > 2 then x + 10 else y",
         vec![
             ("x", vec![1.into(), 2.into(), 3.into(), 4.into()]),
@@ -2410,6 +2368,7 @@ async fn dataflow_matches_comparison_and_if(executor: Rc<LocalExecutor<'static>>
 async fn dataflow_matches_list_operations(executor: Rc<LocalExecutor<'static>>) {
     assert_matches_current(
         executor,
+        "in xs: List<Int>",
         "List.len(xs) + List.head(xs) + List.get(xs, 1)",
         vec![(
             "xs",
@@ -2426,6 +2385,7 @@ async fn dataflow_matches_list_operations(executor: Rc<LocalExecutor<'static>>) 
 async fn dataflow_matches_map_operations(executor: Rc<LocalExecutor<'static>>) {
     assert_matches_current(
         executor,
+        "in x: Int\nin m: Map<Int>",
         r#"Map.get(Map.insert(m, "z", x), "z") + Map.get(m, "a")"#,
         vec![
             ("x", vec![Value::Int(7), Value::Int(9)]),
@@ -2585,56 +2545,11 @@ fn dataflow_map_history_reads_are_unaffected_by_updates() {
     );
 }
 
-// An eager `if` also runs its unselected branch. When that branch fails it is
-// rolled back, including the map its update retained before the failure, so a
-// later tick that selects it sees the map retained before the failed tick.
-#[test]
-fn dataflow_failed_unselected_branch_rolls_back_retained_map() {
-    let spec = elaborated(
-        "use experimental::pattern_matching\n\
-         in flag: Bool\n\
-         in m: Map<Int>\n\
-         in k: Int\n\
-         in guard\n\
-         in source: Str\n\
-         out z: Int\n\
-         z = dynamic(source: Int) + (if flag then 0 \
-             else Map.get(Map.insert(m, \"k\", k), \"a\") + match(k) { _ if guard -> 0, _ -> 0 })",
-    );
-    let inputs = BTreeMap::from([
-        (
-            VarName::new("flag"),
-            vec![false.into(), true.into(), false.into()],
-        ),
-        (
-            VarName::new("m"),
-            vec![int_map(&[("a", 1)]), int_map(&[("a", 5)]), Value::NoVal],
-        ),
-        (VarName::new("k"), vec![1.into(), 2.into(), 3.into()]),
-        // A non-Bool guard fails the unselected branch on the second tick.
-        (
-            VarName::new("guard"),
-            vec![true.into(), 7.into(), true.into()],
-        ),
-        // Dynamic evaluation is what makes this stream's evaluation fallible.
-        (
-            VarName::new("source"),
-            vec![Value::Str("0".into()), Value::NoVal, Value::NoVal],
-        ),
-    ]);
-
-    let rows = eval_dataflow_spec(spec, inputs);
-
-    assert_eq!(
-        output_column(&rows, "z"),
-        vec![1.into(), 0.into(), 1.into()]
-    );
-}
-
 #[apply(async_test)]
 async fn dataflow_matches_update(executor: Rc<LocalExecutor<'static>>) {
     assert_matches_current(
         executor,
+        "in x: Int\nin y: Int",
         "update(x, y)",
         vec![
             (
@@ -2654,6 +2569,7 @@ async fn dataflow_matches_update(executor: Rc<LocalExecutor<'static>>) {
 async fn dataflow_matches_latch(executor: Rc<LocalExecutor<'static>>) {
     assert_matches_current(
         executor,
+        "in x: Int\nin y: Bool",
         "latch(x, y)",
         vec![
             (
@@ -4226,6 +4142,7 @@ async fn dataflow_async_new_property_uses_current_global_tick(
 async fn dataflow_matches_sindex_default(executor: Rc<LocalExecutor<'static>>) {
     assert_matches_current(
         executor,
+        "in x: Int\nin y: Int",
         "default(x[1], 0) + y",
         vec![
             ("x", vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into()]),
@@ -4240,7 +4157,7 @@ async fn dataflow_matches_sindex_default(executor: Rc<LocalExecutor<'static>>) {
 
 #[apply(async_test)]
 async fn dataflow_runtime_matches_recursive_accumulator(executor: Rc<LocalExecutor<'static>>) {
-    let spec = elaborated("in x\nout z\nz = default(z[1], 0) + x");
+    let spec = elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x");
     let inputs = BTreeMap::from([(
         VarName::new("x"),
         vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into()],
@@ -4280,14 +4197,14 @@ async fn dataflow_stateful_lifting_matches_current(executor: Rc<LocalExecutor<'s
 
     for expression in ["default(x, 0)", "is_defined(x)", "when(x)"] {
         let expected = eval_untimed(executor.clone(), expression, vars.clone()).await;
-        let actual = eval_dataflow(expression, vars.clone());
+        let actual = eval_dataflow("in x: Int", expression, vars.clone());
         assert_eq!(actual, expected, "dataflow differed for `{expression}`");
     }
 }
 
 #[test]
 fn dataflow_lifting_does_not_depend_on_recursive_plan_shape() {
-    let spec = elaborated("in x\nout z\nz = if false then z[1] else default(x, 42)");
+    let spec = elaborated("in x: Int\nout z: Int\nz = if false then z[1] else default(x, 42)");
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
 
     let output = evaluate(
@@ -4406,7 +4323,6 @@ enum LifecycleErrorSignature {
     MonitorFailed,
     MatchGuardNotBool(String),
     MatchUnmatched(String),
-    RuntimeType(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4465,9 +4381,7 @@ fn lifecycle_property_error(error: &DataflowEvaluationError) -> LifecycleErrorSi
         DataflowEvaluationError::MatchUnmatched(value) => {
             LifecycleErrorSignature::MatchUnmatched(value.clone())
         }
-        DataflowEvaluationError::RuntimeType(error) => {
-            LifecycleErrorSignature::RuntimeType(error.to_string())
-        }
+
         DataflowEvaluationError::InputCountMismatch { expected, actual } => {
             LifecycleErrorSignature::InputCount {
                 expected: *expected,
@@ -4940,9 +4854,8 @@ fn unspecialised_dataflow_checks_runtime_source_against_its_site() {
 
 /// The checked untimed interpreter accepts nested runtime source. The nested
 /// occurrence belongs to no specification, so its site comes from the
-/// preparation of the accepted source itself. (Untyped evaluation checks
-/// runtime source with every variable of type `Any`, which a nested source
-/// stream does not satisfy.)
+/// preparation of the accepted source itself, with concrete environment
+/// and result information.
 #[apply(async_test)]
 async fn nested_runtime_source_is_accepted_at_its_own_prepared_site(
     executor: Rc<LocalExecutor<'static>>,

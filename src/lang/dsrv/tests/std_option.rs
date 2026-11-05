@@ -11,9 +11,6 @@ use crate::VarName;
 use crate::core::{StreamType, UnionAlternative, UnionPayload, UnionValue, Value};
 use crate::dataflow::DataflowMonitor;
 use crate::dsrv_fixtures::WithoutWarnings;
-#[cfg(feature = "thread-safe-ast")]
-use crate::lang::dsrv::TypeCheckMode;
-use crate::lang::dsrv::TypeCheckOptions;
 use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification};
 use crate::lang::dsrv::catalogue::{Catalogue, EmbeddedModule};
 use crate::lang::dsrv::diagnostics::SemanticError;
@@ -25,15 +22,12 @@ use crate::lang::dsrv::path::ModuleName;
 use crate::lang::dsrv::runtime_expression::{RuntimeExpressionSite, is_runtime_expression};
 use crate::lang::dsrv::source_map::SourceLabel;
 use crate::lang::dsrv::syntax::{ParsedDeclaration, parse_specification};
-use crate::lang::dsrv::type_checker::TCType;
 
 use test_log::test;
 
 /// What a caller needs to name `Option<T>`, call the defs, and write the
 /// constructors. The experiments `std::option` itself uses are its own.
 const HEADER: &str = "use experimental::{modules, generics, tagged_unions}\nuse std::option::*\n";
-
-const BOTH: [TypeCheckOptions; 2] = [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL];
 
 fn name(segment: &str) -> ModuleName {
     ModuleName::new(segment).expect("a lowercase name")
@@ -47,22 +41,22 @@ fn parse(source: &str) -> DsrvSpecification {
     parse_str(source).unwrap_or_else(|error| panic!("{source}: {error}"))
 }
 
-fn check(source: &str, options: TypeCheckOptions) -> CheckedDsrvSpecification {
+fn check(source: &str) -> CheckedDsrvSpecification {
     parse(source)
-        .check(options)
+        .check()
         .without_warnings()
-        .unwrap_or_else(|errors| panic!("{source} ({:?}): {errors:?}", options.mode))
+        .unwrap_or_else(|errors| panic!("{source} ({:?}): {errors:?}", "checked"))
 }
 
-fn check_err(source: &str, options: TypeCheckOptions) -> Vec<SemanticError> {
+fn check_err(source: &str) -> Vec<SemanticError> {
     parse(source)
-        .check(options)
+        .check()
         .without_warnings()
         .err()
-        .unwrap_or_else(|| panic!("{source} ({:?}): expected checking to fail", options.mode))
+        .unwrap_or_else(|| panic!("{source} ({:?}): expected checking to fail", "checked"))
 }
 
-fn type_of(checked: &CheckedDsrvSpecification, var: &str) -> TCType {
+fn type_of(checked: &CheckedDsrvSpecification, var: &str) -> StreamType {
     checked
         .var_expr_ref(&VarName::from(var))
         .unwrap_or_else(|| panic!("{var} is defined"))
@@ -223,9 +217,8 @@ fn the_parser_facade_activates_embedded_modules() {
 fn a_qualified_import_reaches_the_type_and_defs_through_the_module() {
     let source = "use experimental::{modules, generics}\nuse std::option\n\
                   in o: option::Option<Int>\nout y: Bool\ny = std::option::is_none(o)\n";
-    for options in BOTH {
-        assert_eq!(type_of(&check(source, options), "y"), TCType::Bool);
-    }
+
+    assert_eq!(type_of(&check(source), "y"), StreamType::Bool);
 }
 
 // -----------------------------------------------------------------------------
@@ -242,44 +235,31 @@ const PROGRAM: &str = "in x: Int\nin o: Option<Int>\n\
     out flat: Int = unwrap_or(unwrap_or(nested, empty), x + 1)\n";
 
 #[test]
-fn the_api_checks_strictly_and_gradually() {
+fn the_api_checks_concrete_types() {
     let source = format!("{HEADER}{PROGRAM}");
-    for options in BOTH {
-        let checked = check(&source, options);
-        assert_eq!(checked.check_mode(), options.mode);
-        for (var, expected) in [
-            ("present", TCType::Bool),
-            ("absent", TCType::Bool),
-            ("unwrapped", TCType::Int),
-            ("flat", TCType::Int),
-        ] {
-            assert_eq!(
-                type_of(&checked, var),
-                expected,
-                "{var} ({:?})",
-                options.mode
-            );
-        }
+
+    let checked = check(&source);
+
+    for (var, expected) in [
+        ("present", StreamType::Bool),
+        ("absent", StreamType::Bool),
+        ("unwrapped", StreamType::Int),
+        ("flat", StreamType::Int),
+    ] {
+        assert_eq!(type_of(&checked, var), expected, "{var} ({:?})", "checked");
     }
 }
 
-/// Unannotated streams are the gradual checker's to infer, through the
+/// Unannotated streams infer concrete types through the
 /// inlined bodies.
 #[test]
-fn gradual_checking_infers_through_the_defs() {
+fn checking_infers_through_the_defs() {
     let source = format!(
         "{HEADER}in o: Option<Str>\nout present\npresent = is_some(o)\nout value\nvalue = unwrap_or(o, \"\")\n"
     );
-    let checked = check(&source, TypeCheckOptions::GRADUAL);
-    assert_eq!(type_of(&checked, "present"), TCType::Bool);
-    assert_eq!(type_of(&checked, "value"), TCType::Str);
-    assert!(
-        parse(&source)
-            .check(TypeCheckOptions::STRICT)
-            .result()
-            .is_err(),
-        "strict checking still wants the annotations"
-    );
+    let checked = check(&source);
+    assert_eq!(type_of(&checked, "present"), StreamType::Bool);
+    assert_eq!(type_of(&checked, "value"), StreamType::Str);
 }
 
 /// A constructor takes its union from where it stands: an annotated stream,
@@ -290,55 +270,55 @@ fn constructors_are_contextual() {
         "{HEADER}in x: Int\nout y: Option<Int> = Some(x)\nout z: Option<Int> = None\n\
          out w: Option<Int> = if x > 0 then Some(x) else None\n"
     );
-    for options in BOTH {
-        let checked = check(&source, options);
-        for var in ["y", "z", "w"] {
-            assert_eq!(
-                type_of(&checked, var),
-                TCType::from_stream_type(&option_of(StreamType::Int)),
-                "{var}"
-            );
-        }
+
+    let checked = check(&source);
+    for var in ["y", "z", "w"] {
+        assert_eq!(
+            type_of(&checked, var),
+            (&option_of(StreamType::Int)).clone(),
+            "{var}"
+        );
     }
+
     // The result and fallback provide the constructor's Option<Int> context.
     let contextual = format!("{HEADER}in x: Int\nout y: Int = unwrap_or(None, x)\n");
-    for options in BOTH {
-        assert_eq!(type_of(&check(&contextual, options), "y"), TCType::Int);
-        check_err(&format!("{HEADER}out y: Bool = is_some(None)\n"), options);
-    }
+
+    assert_eq!(type_of(&check(&contextual), "y"), StreamType::Int);
+    // Bool does not determine the payload type needed by the constructor.
+    assert!(!check_err(&format!("{HEADER}out y: Bool = is_some(None)\n")).is_empty());
 }
 
 #[test]
 fn payloads_keep_their_types() {
     for (payload, fallback, expected) in [
-        ("Str", "\"none\"", TCType::Str),
-        ("Float", "0.5", TCType::Float),
+        ("Str", "\"none\"", StreamType::Str),
+        ("Float", "0.5", StreamType::Float),
         (
             "List<Int>",
             "List(1, 2)",
-            TCType::List(Box::new(TCType::Int)),
+            StreamType::List(Box::new(StreamType::Int)),
         ),
         (
             "(Int, Bool)",
             "Tuple(1, true)",
-            TCType::Tuple(vec![TCType::Int, TCType::Bool].into()),
+            StreamType::Tuple(vec![StreamType::Int, StreamType::Bool].into()),
         ),
         (
             "Struct<a: Int, b: Str>",
             "{a: 1, b: \"b\"}",
-            TCType::from_stream_type(&StreamType::Struct(
+            (&StreamType::Struct(
                 vec![("a".into(), StreamType::Int), ("b".into(), StreamType::Str)].into(),
                 false,
-            )),
+            ))
+                .clone(),
         ),
     ] {
         let source = format!(
             "{HEADER}in o: Option<{payload}>\nout y: {payload} = unwrap_or(o, {fallback})\n\
              out p: Bool = is_some(o)\n"
         );
-        for options in BOTH {
-            assert_eq!(type_of(&check(&source, options), "y"), expected, "{source}");
-        }
+
+        assert_eq!(type_of(&check(&source), "y"), expected, "{source}");
     }
 }
 
@@ -356,23 +336,22 @@ fn misuse_is_reported_at_the_call_with_the_embedded_definition() {
         ("in o: Option<Int>\nout y: Int = o + 1\n", "o + 1"),
     ] {
         let source = format!("{HEADER}{body}");
-        for options in BOTH {
-            let errors = check_err(&source, options);
-            let location = errors[0].location();
-            let primary = location.primary().expect("a primary site");
-            assert_eq!(primary.label().to_string(), "<string>");
-            assert_eq!(primary.snippet(), Some(call));
-            if call != "o + 1" {
-                let definition = location.definition().expect("a definition note");
-                assert_eq!(definition.label().to_string(), "<embedded std/option.dsrv>");
-            }
+
+        let errors = check_err(&source);
+        let location = errors[0].location();
+        let primary = location.primary().expect("a primary site");
+        assert_eq!(primary.label().to_string(), "<string>");
+        assert_eq!(primary.snippet(), Some(call));
+        if call != "o + 1" {
+            let definition = location.definition().expect("a definition note");
+            assert_eq!(definition.label().to_string(), "<embedded std/option.dsrv>");
         }
     }
 }
 
 fn evaluate(source: &str, rows: &[Vec<Value>]) -> Vec<Vec<(String, Value)>> {
     let elaborated = parse(source)
-        .check_and_elaborate(TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .unwrap_or_else(|errors| panic!("{source}: {errors:?}"));
     let mut monitor = DataflowMonitor::compile_checked(elaborated).expect("compiles");
@@ -463,7 +442,7 @@ fn unwrap_or_evaluates_its_default_eagerly() {
 fn the_embedded_header_authorises_the_embedded_body() {
     let source = "use experimental::{modules, generics}\nuse std::option::*\n\
                   in o: Option<Int>\nout y: Bool = is_some(o)\n";
-    check(source, TypeCheckOptions::STRICT);
+    check(source);
 }
 
 /// Settings requested for the application are the application's. A
@@ -588,7 +567,7 @@ fn an_item_std_option_does_not_export_is_an_ordinary_error() {
 fn application_names_collide_with_std_names_as_any_module_s_do() {
     let shadowed = "use experimental::{modules}\nuse std::option::*\ntype Option = Int\n\
                     in o: Option\nout y: Int = o + 1\n";
-    check(shadowed, TypeCheckOptions::STRICT);
+    check(shadowed);
     let clash = "use experimental::{modules}\nuse std::option::Option\ntype Option = Int\n\
                  in o: Int\n";
     assert!(matches!(parse_str(clash), Err(DsrvParseError::Resolve(_))));
@@ -928,10 +907,10 @@ fn a_program_using_std_option_crosses_threads() {
     fn shareable<T: Send + Sync>(_: &T) {}
     let spec = parse(&format!("{HEADER}{PROGRAM}"));
     shareable(&spec);
-    let checked = std::thread::spawn(move || spec.check(TypeCheckOptions::STRICT))
+    let checked = std::thread::spawn(move || spec.check())
         .join()
         .expect("the thread finished")
         .without_warnings()
         .expect("checks on another thread");
-    assert_eq!(checked.check_mode(), TypeCheckMode::Strict);
+    shareable(&checked);
 }

@@ -1031,6 +1031,10 @@ mod integration_tests {
             );
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
+                !stderr.contains("TypeError(") && stderr.contains("invalid_typed_model.dsrv:"),
+                "a type error should be shown with its line and column: {stderr}"
+            );
+            assert!(
                 stderr.contains("type check"),
                 "expected a type-checking error for {semantics}: {stderr}"
             );
@@ -1042,9 +1046,14 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
-    async fn test_untimed_and_legacy_alias_run_gradually_checked_models() {
+    async fn test_untimed_choices_and_legacy_alias_run_inferred_outputs() {
         for runtime in ["async", "semi-sync", "dataflow"] {
-            for semantics in [None, Some("untimed"), Some("gradual-typed-untimed")] {
+            for semantics in [
+                None,
+                Some("untimed"),
+                Some("typed-untimed"),
+                Some("gradual-typed-untimed"),
+            ] {
                 let model = fixture_path("simple_add_inferred.dsrv");
                 let input = fixture_path("simple_add_typed.input");
                 let mut args = vec![
@@ -1071,21 +1080,34 @@ mod integration_tests {
                 );
             }
         }
-        let output = run_cli(&[
-            &fixture_path("simple_add_inferred.dsrv"),
-            "--input-file",
-            &fixture_path("simple_add_typed.input"),
-            "--semantics",
-            "typed-untimed",
-        ])
-        .await
-        .unwrap();
-        assert!(
-            !output.status.success(),
-            "strict typing must require annotations"
-        );
-        assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("type checking"));
+    }
+
+    #[apply(async_test)]
+    async fn every_checked_semantics_requires_input_annotations() {
+        let path = std::env::temp_dir().join(format!("tc-bare-input-{}.dsrv", std::process::id()));
+        std::fs::write(&path, "in x\nin y: Int\nout z = x + y").unwrap();
+        for semantics in ["untimed", "typed-untimed", "gradual-typed-untimed"] {
+            let output = run_cli(&[
+                path.to_str().unwrap(),
+                "--input-file",
+                &fixture_path("simple_add_typed.input"),
+                "--semantics",
+                semantics,
+            ])
+            .await
+            .unwrap();
+            assert!(
+                !output.status.success(),
+                "{semantics} accepted a bare input"
+            );
+            assert!(output.stdout.is_empty());
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                error.contains("annotation") && error.contains("x"),
+                "{error}"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[apply(async_test)]

@@ -18,8 +18,7 @@ use trustworthiness_checker::lang::dsrv::type_checker::check_value_stream_type;
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{
-    CheckedDsrvSpecification, DsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions,
-    dsrv_fixtures::*,
+    CheckedDsrvSpecification, DsrvSpecification, ElaboratedDsrvSpecification, dsrv_fixtures::*,
 };
 use trustworthiness_checker::{
     InputStream, Value,
@@ -28,6 +27,9 @@ use trustworthiness_checker::{
 };
 use trustworthiness_checker::{VarName, async_test};
 use winnow::Parser;
+
+#[path = "support/panic_capture.rs"]
+mod panic_capture;
 
 async fn channel_output(
     variables: impl IntoIterator<Item = VarName>,
@@ -79,42 +81,21 @@ async fn channel_output(
 enum TestConfiguration {
     AsyncUntimed,
     AsyncTypedUntimed,
-    AsyncGradualTypedUntimed,
     SemiSyncUntimed,
     SemiSyncTypedUntimed,
-    SemiSyncGradualTypedUntimed,
 }
 
 fn type_check(spec: DsrvSpecification) -> Result<CheckedDsrvSpecification, SemanticErrors> {
-    spec.check(TypeCheckOptions::STRICT).without_warnings()
-}
-
-fn type_check_gradual(spec: DsrvSpecification) -> Result<CheckedDsrvSpecification, SemanticErrors> {
-    spec.check(TypeCheckOptions::GRADUAL).without_warnings()
+    spec.check().without_warnings()
 }
 
 impl TestConfiguration {
-    fn semantics(self) -> Semantics {
-        match self {
-            TestConfiguration::AsyncUntimed | TestConfiguration::SemiSyncUntimed => {
-                Semantics::Untimed
-            }
-            TestConfiguration::AsyncTypedUntimed | TestConfiguration::SemiSyncTypedUntimed => {
-                Semantics::TypedUntimed
-            }
-            TestConfiguration::AsyncGradualTypedUntimed
-            | TestConfiguration::SemiSyncGradualTypedUntimed => Semantics::GradualTypedUntimed,
-        }
-    }
-
     fn all() -> Vec<Self> {
         vec![
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
-            TestConfiguration::AsyncGradualTypedUntimed,
             TestConfiguration::SemiSyncUntimed,
             TestConfiguration::SemiSyncTypedUntimed,
-            TestConfiguration::SemiSyncGradualTypedUntimed,
         ]
     }
 
@@ -122,10 +103,8 @@ impl TestConfiguration {
         vec![
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
-            TestConfiguration::AsyncGradualTypedUntimed,
             TestConfiguration::SemiSyncUntimed,
             TestConfiguration::SemiSyncTypedUntimed,
-            TestConfiguration::SemiSyncGradualTypedUntimed,
         ]
     }
 
@@ -150,19 +129,12 @@ fn create_builder_from_config(
             let builder = builder.runtime(RuntimeSpec::Async);
             builder.semantics(Semantics::TypedUntimed)
         }
-        TestConfiguration::AsyncGradualTypedUntimed => {
-            let builder = builder.runtime(RuntimeSpec::Async);
-            builder.semantics(Semantics::GradualTypedUntimed)
-        }
         TestConfiguration::SemiSyncUntimed => builder
             .runtime(RuntimeSpec::SemiSync)
             .semantics(Semantics::Untimed),
         TestConfiguration::SemiSyncTypedUntimed => builder
             .runtime(RuntimeSpec::SemiSync)
             .semantics(Semantics::TypedUntimed),
-        TestConfiguration::SemiSyncGradualTypedUntimed => builder
-            .runtime(RuntimeSpec::SemiSync)
-            .semantics(Semantics::GradualTypedUntimed),
     }
 }
 
@@ -181,7 +153,7 @@ async fn run_typed_runtime_with_spec(
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(elaborate_for(spec, Semantics::TypedUntimed))
+        .model(elaborate(spec))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(runtime)
@@ -208,7 +180,7 @@ async fn run_typed_lalr_runtime_with_spec(
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(elaborate_for(spec, Semantics::TypedUntimed))
+        .model(elaborate(spec))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(runtime)
@@ -235,7 +207,7 @@ async fn run_untyped_lalr_runtime_with_spec(
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(elaborate_for(spec, Semantics::Untimed))
+        .model(elaborate(spec))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(runtime)
@@ -278,7 +250,7 @@ async fn run_typed_semisync_runtime(
     .await
 }
 
-async fn run_gradual_typed_runtime_with_spec(
+async fn run_checked_runtime_with_spec(
     executor: Rc<LocalExecutor<'static>>,
     runtime: RuntimeSpec,
     spec_str: &str,
@@ -293,17 +265,59 @@ async fn run_gradual_typed_runtime_with_spec(
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(elaborate_for(spec, Semantics::GradualTypedUntimed))
+        .model(elaborate(spec))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(runtime)
-        .semantics(Semantics::GradualTypedUntimed)
+        .semantics(Semantics::TypedUntimed)
         .build()
         .await
         .expect("general runtime builder should succeed");
 
     executor.spawn(monitor.run()).detach();
     with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
+}
+
+// Alternatives that bind names to swapped positions of a tuple of literals
+// run as the checker typed them: the alternative that matched decides each
+// name's value, and the arm's expected type is that of every literal bound.
+#[apply(async_test)]
+async fn or_pattern_alternatives_bind_literals_at_the_type_the_arm_decides(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    for (output, expected) in [
+        ("Int", vec![Value::Int(10), Value::Int(100)]),
+        ("Float", vec![Value::Float(10.0), Value::Float(100.0)]),
+    ] {
+        let (first, second) = if output == "Float" {
+            ("10.0", "100.0")
+        } else {
+            ("10", "100")
+        };
+        let specification = format!(
+            "use experimental::{{pattern_matching}}\n\
+             in choice: Int\n\
+             out y: {output}\n\
+             y = match(Tuple(choice, {first}, {second})) {{ (0, a, b) | (1, b, a) -> a, _ -> 0, }}\n"
+        );
+        let input = BTreeMap::from([(VarName::new("choice"), vec![Value::Int(0), Value::Int(1)])]);
+        for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+            let outputs = run_checked_runtime_with_spec(
+                executor.clone(),
+                runtime,
+                &specification,
+                input.clone(),
+                "or-pattern outputs",
+            )
+            .await?;
+            let values = outputs
+                .into_iter()
+                .map(|(_, row)| row[&VarName::new("y")].clone())
+                .collect::<Vec<_>>();
+            assert_eq!(values, expected, "{output} on {runtime:?}");
+        }
+    }
+    Ok(())
 }
 
 #[apply(async_test)]
@@ -507,7 +521,7 @@ fn expected_dsrv_future_window_outputs(size: usize) -> Vec<(usize, BTreeMap<VarN
 }
 
 #[apply(async_test)]
-async fn test_gradual_typed_runtime_output_can_reference_aux_variable(
+async fn test_checked_runtime_output_can_reference_aux_variable(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     let spec = r#"
@@ -537,12 +551,12 @@ always_x = above && default(above[1], true) && default(above[2], true)
         .collect::<Vec<_>>();
 
     for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
-        let outputs = run_gradual_typed_runtime_with_spec(
+        let outputs = run_checked_runtime_with_spec(
             executor.clone(),
             runtime,
             spec,
             input(),
-            "gradual typed aux output runtime outputs.collect()",
+            "checked aux output runtime outputs.collect()",
         )
         .await?;
 
@@ -556,7 +570,7 @@ always_x = above && default(above[1], true) && default(above[2], true)
 }
 
 #[apply(async_test)]
-async fn test_gradual_typed_runtime_future_window_matches_benchmark(
+async fn test_checked_runtime_future_window_matches_benchmark(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     let spec = r#"
@@ -576,12 +590,12 @@ always_x = (x > 3.0) && (x[1] > 3.0) && (x[2] > 3.0)
     let expected = expected_dsrv_future_window_outputs(size);
 
     for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
-        let outputs = run_gradual_typed_runtime_with_spec(
+        let outputs = run_checked_runtime_with_spec(
             executor.clone(),
             runtime,
             spec,
             input(),
-            "gradual typed future window benchmark outputs.collect()",
+            "checked future window benchmark outputs.collect()",
         )
         .await?;
 
@@ -843,11 +857,10 @@ fn test_mixed_int_and_float_operands_need_an_explicit_cast() {
     ];
     for symbol in symbols {
         for (x_type, y_type) in [("Int", "Float"), ("Float", "Int")] {
-            let spec =
-                format!("in x: {x_type}\nin y: {y_type}\nout result: Any\nresult = x {symbol} y");
-            for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
+            let spec = format!("in x: {x_type}\nin y: {y_type}\nout result\nresult = x {symbol} y");
+            for _ in [()] {
                 let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
-                let (checked, _warnings) = parsed.check(options).into_parts();
+                let (checked, _warnings) = parsed.check().into_parts();
                 let errors = checked
                     .err()
                     .unwrap_or_else(|| panic!("`x {symbol} y` on {x_type} and {y_type} checked"));
@@ -964,10 +977,12 @@ fn test_literal_arithmetic_adopts_float_in_every_runtime() {
 /// An `if` between integer literals is flexible too, including when nothing
 /// expects a type of it.
 #[test]
-fn test_nested_literal_if_joins_float_without_warning() {
-    let spec =
-        "in x: Float\nout b: Bool\nb = (if x > 0 then x else (if x < -1 then 1 else 2)) < 0.5";
+fn test_nested_literal_if_uses_an_immediate_float_context() {
+    let body = "if x > 0 then x else (if x < -1 then 1 else 2)";
+    let spec = format!("in x: Float\naux selected: Float = {body}\nout b: Bool = selected < 0.5");
     assert!(type_check(spec.parse().expect("spec parses")).is_ok());
+    let unresolved = format!("in x: Float\nout b: Bool = ({body}) < 0.5");
+    assert!(type_check(unresolved.parse().expect("spec parses")).is_err());
 }
 
 /// A literal compared with a value it cannot become is reported by the
@@ -982,13 +997,21 @@ fn test_literal_compared_with_another_type_reports_the_operator() {
 }
 
 /// Division of integer literals is integer division, so it never adopts
-/// `Float`, and a literal that is not arithmetic on literals does not either.
+/// `Float`, and arithmetic on an `Int` variable does not either. Remainder
+/// and power of literals mean the same value either way, so they do.
 #[test]
 fn test_integer_division_of_literals_does_not_adopt_float() {
     for spec in [
-        "in x: Float\nout z: Float\nz = x + 7 / 2",
         "in x: Float\nout z: Float\nz = x + 7 % 2",
         "in x: Float\nout z: Float\nz = x + 2 ** 3",
+    ] {
+        let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
+        if let Err(errors) = type_check(parsed) {
+            panic!("{spec} should check: {errors:?}");
+        }
+    }
+    for spec in [
+        "in x: Float\nout z: Float\nz = x + 7 / 2",
         "in x: Float\nin n: Int\nout z: Float\nz = x + (n + 1)",
         "in x: Float\nout b: Bool\nb = x < 7 / 2",
     ] {
@@ -999,6 +1022,275 @@ fn test_integer_division_of_literals_does_not_adopt_float() {
         assert!(
             format!("{errors:?}").contains("as Float"),
             "{spec} should point at the cast: {errors:?}"
+        );
+    }
+}
+
+/// The values of `output` when the checked specification `spec` runs on
+/// `input`, in each runtime. The output must depend on an input.
+fn outputs_in_every_runtime(
+    spec: &str,
+    input: &BTreeMap<VarName, Vec<Value>>,
+    output: &str,
+) -> Vec<(RuntimeSpec, Vec<Value>)> {
+    [
+        RuntimeSpec::Async,
+        RuntimeSpec::SemiSync,
+        RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+    ]
+    .into_iter()
+    .map(|runtime| {
+        let executor = Rc::new(LocalExecutor::new());
+        let rows = smol::block_on(executor.run(run_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            input.clone(),
+            "type variable outputs.collect()",
+        )))
+        .expect("outputs are collected");
+        let values = rows
+            .into_iter()
+            .map(|(_, row)| row[&VarName::new(output)].clone())
+            .collect();
+        (runtime, values)
+    })
+    .collect()
+}
+
+fn floats(values: &[f64]) -> Value {
+    Value::List(values.iter().map(|&x| Value::Float(x)).collect())
+}
+
+/// An integer literal is an `Int` or a `Float`, decided by whatever it
+/// meets: a `Float` in a list it is compared with, appended to, or taken
+/// from, the parameter of a function it is passed to, or the result of a
+/// generic `def` it is an argument of.
+#[test]
+fn test_integer_literals_meet_a_float_through_lists_lambdas_and_generic_calls() {
+    let rows = [1.5, -2.0];
+    let generic = "use experimental::{functions, generics}\n\
+                   def first<T>(xs: List<T>) -> T = List.head(xs)\n";
+    let cases: [(&str, &str, fn(f64) -> Value); 5] = [
+        ("", "out z: Bool\nz = [x] == [1, 2]", |_| Value::Bool(false)),
+        (
+            "",
+            "out z: Float\nz = x + (\\numbers: List<Float> -> List.head(numbers))(List(1, 2))",
+            |x| Value::Float(x + 1.0),
+        ),
+        (
+            "",
+            "out z: List<Float>\nz = List.append(List(1, 2), x)",
+            |x| floats(&[1.0, 2.0, x]),
+        ),
+        // The stream is appended to so that it depends on an input.
+        (
+            "",
+            "out z: List<Float>\nz = List.append(List.map(\\a: Float -> a * 2.0, List(1, 2)), x)",
+            |x| floats(&[2.0, 4.0, x]),
+        ),
+        (generic, "out z: Float\nz = x + first(List(1, 2))", |x| {
+            Value::Float(x + 1.0)
+        }),
+    ];
+    let input = BTreeMap::from([(
+        VarName::new("x"),
+        rows.iter().map(|&x| Value::Float(x)).collect::<Vec<_>>(),
+    )]);
+    for (header, body, model) in cases {
+        let spec = format!("{header}in x: Float\n{body}");
+        let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
+        if let Err(errors) = type_check(parsed) {
+            panic!("{spec} should check: {errors:?}");
+        }
+        let expected: Vec<_> = rows.iter().map(|&x| model(x)).collect();
+        for (runtime, actual) in outputs_in_every_runtime(&spec, &input, "z") {
+            assert_eq!(actual, expected, "`{body}` in runtime {runtime:?}");
+        }
+    }
+}
+
+/// A lambda's parameters and an empty list's elements take their types from
+/// immediate context. An unresolved interior still requests an annotation.
+#[test]
+fn test_context_types_callback_parameters_and_empty_list_elements() {
+    for spec in ["out s: Int\ns = List.fold(\\acc: Int, a: Int -> acc + a, 0, List())"] {
+        let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
+        if let Err(errors) = type_check(parsed) {
+            panic!("{spec} should check: {errors:?}");
+        }
+    }
+    for source in [
+        "out n: Int\nn = List.len(List())",
+        "out n: Int\nn = List.fold(\\acc, a -> acc + a, 0, List())",
+    ] {
+        let errors = type_check(source.parse().unwrap())
+            .expect_err("the result and accumulator do not constrain an unknown list element");
+        assert!(
+            format!("{errors:?}").to_lowercase().contains("annotat"),
+            "{errors:?}"
+        );
+    }
+}
+
+/// `/` of two integer literals divides as `Int` whatever its context; the
+/// exactness of a literal and the sign of an `Int` exponent are checked once
+/// the literal's type is decided.
+#[test]
+fn test_literal_division_exactness_and_exponent_sign_once_decided() {
+    let input = BTreeMap::from([(VarName::new("x"), vec![Value::Float(0.5)])]);
+    let spec = "in x: Float\nout z: Int\nz = if x > 0.0 then 7 / 2 else 0";
+    for (runtime, actual) in outputs_in_every_runtime(spec, &input, "z") {
+        assert_eq!(actual, vec![Value::Int(3)], "{runtime:?}");
+    }
+    let inferred =
+        type_check("out z\nz = 7 / 2".parse().expect("spec parses")).expect("7 / 2 checks");
+    assert_eq!(
+        inferred.type_annotations().get(&VarName::new("z")),
+        Some(&StreamType::Int)
+    );
+    for (spec, message) in [
+        ("out y: Float\ny = 7 / 2", "as Float"),
+        (
+            "in x: Float\nout z: Float\nz = x + 9007199254740993",
+            "cannot be represented exactly",
+        ),
+        (
+            "out z: Int\nz = 2 ** -1",
+            "integer exponent must be non-negative",
+        ),
+    ] {
+        let errors = type_check(spec.parse().expect("spec parses"))
+            .err()
+            .unwrap_or_else(|| panic!("{spec} should not check"));
+        assert!(
+            format!("{errors:?}").contains(message),
+            "{spec}: {errors:?}"
+        );
+    }
+    let spec = "out z: Float\nz = 2 ** -1";
+    if let Err(errors) = type_check(spec.parse().expect("spec parses")) {
+        panic!("{spec} should check: {errors:?}");
+    }
+}
+
+/// A failed root reports its concrete inner error independently of another root.
+#[test]
+fn test_a_failing_root_keeps_its_concrete_inner_diagnostic() {
+    for source in [
+        "in x: Float\nout y\ny = List(x, if 1 then 1.0 else 2.0)\nout ok: Int = 1",
+        "out a: List<Int> = List(if 1 then 1 else 2, 0)\nout ok: Int = 1",
+    ] {
+        let errors = type_check(source.parse().expect("spec parses"))
+            .expect_err("the condition is not a Bool");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            format!("{errors:?}").contains("expected Bool"),
+            "{errors:?}"
+        );
+    }
+}
+
+/// A lambda's parameter has the type it was given before its body is
+/// checked, so the operators in the body are checked at that type.
+#[test]
+fn test_lambda_parameters_are_checked_at_the_types_they_take() {
+    for (spec, message) in [
+        (
+            "in xs: List<Str>\nout ys: List<Str>\nys = List.map(\\a -> a + a, xs)",
+            "cannot combine Str and Str",
+        ),
+        (
+            "in xs: List<List<Int>>\nout ys: List<List<Int>>\nys = List.filter(\\a -> a < a, xs)",
+            "cannot combine List<Int> and List<Int>",
+        ),
+    ] {
+        let errors = type_check(spec.parse().expect("spec parses"))
+            .err()
+            .unwrap_or_else(|| panic!("{spec} should not check"));
+        assert!(
+            format!("{errors:?}").contains(message),
+            "{spec}: {errors:?}"
+        );
+    }
+}
+
+/// A generic call whose arguments disagree about a type parameter is
+/// rejected, and its failed unification binds nothing: the parameter is still
+/// the integer literal's type when the error is reported, and a sibling
+/// stream checked after it is unaffected.
+#[test]
+fn test_a_generic_call_whose_arguments_disagree_binds_nothing() {
+    let header = "use experimental::{functions, generics}\ndef same<T>(a: T, b: T) -> T = a\n";
+    for declaration in ["out y", "out y: Int"] {
+        let spec = format!("{header}{declaration} = same(2, \"s\")\nout ok: Int = 1");
+        let errors = type_check(spec.parse().expect("spec parses"))
+            .expect_err("repeated generic parameters must agree");
+        let text = format!("{errors:?}");
+        assert!(text.contains("Int") && text.contains("Str"), "{text}");
+    }
+    let spec = format!("{header}out y = same(2, 3.5)");
+    assert!(
+        type_check(spec.parse().expect("spec parses")).is_err(),
+        "earlier Int is concrete"
+    );
+}
+
+/// The type a generic parameter takes from structs of which at least one is
+/// open is their common fields, whichever order the arguments come in: each
+/// call is accepted, what it gives can be read at those fields and no others.
+#[test]
+fn test_a_generic_parameter_requires_an_explicit_common_struct_type() {
+    let header = "use experimental::{functions, generics}\n\
+                  type B = Struct<a: Int, ...>\n\
+                  def same<T>(x: T, y: T) -> T = x\n\
+                  in closed: Struct<a: Int, b: Int>\n\
+                  in wider: Struct<a: Int, c: Int, ...>\n";
+    let closed = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("b".into(), Value::Int(2)),
+    ]));
+    let wider = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("c".into(), Value::Int(3)),
+    ]));
+    let inputs = [("closed", closed.clone()), ("wider", wider)];
+    for expression in ["same(closed, wider)", "if true then closed else wider"] {
+        let spec = format!("{header}out y: B = {expression}");
+        for (runtime, result) in run_one_tick_everywhere(&spec, &inputs, "y") {
+            assert_eq!(result, Ok(vec![closed.clone()]), "{runtime}: {spec}");
+        }
+        let unannotated = format!("{header}out y = {expression}");
+        let errors = type_check(unannotated.parse().expect("spec parses"))
+            .expect_err("different concrete shapes need a common target");
+        assert!(!errors.is_empty(), "{unannotated}");
+    }
+}
+
+/// What a generic parameter does not take common fields from stays refused:
+/// two closed structs saying they have different fields, a struct beside
+/// something else, and open structs whose common field disagrees.
+#[test]
+fn test_a_generic_parameter_keeps_refusing_what_is_not_open_structs() {
+    let header = "use experimental::{functions, generics}\n\
+                  def same<T>(x: T, y: T) -> T = x\n\
+                  in one: Struct<a: Int>\n\
+                  in two: Struct<a: Int, b: Int>\n\
+                  in open: Struct<a: Int, ...>\n\
+                  in text: Struct<a: Str, b: Int>\n\
+                  in n: Int\n";
+    for call in [
+        "same(one, two)",
+        "same(two, one)",
+        "same(open, n)",
+        "same(n, open)",
+        "same(open, text)",
+        "same(text, open)",
+    ] {
+        let source = format!("{header}out y\ny = {call}");
+        assert!(
+            type_check(source.parse().expect("spec parses")).is_err(),
+            "`{call}` should be refused"
         );
     }
 }
@@ -1024,11 +1316,7 @@ fn run_catching_panics(
                 .model(
                     // Admitted programs may warn, for example of a redundant cast.
                     spec.clone()
-                        .check_and_elaborate(
-                            trustworthiness_checker::runtime::builder::type_check_options(
-                                semantics,
-                            ),
-                        )
+                        .check_and_elaborate()
                         .into_parts()
                         .0
                         .map_err(|errors| format!("elaboration failed: {errors:?}"))?,
@@ -1069,9 +1357,8 @@ fn run_catching_panics(
     }
 }
 
-/// The runtimes a run-time check of an `Any` value is tested in, each with
-/// the semantics the command line runs it with.
-fn any_check_runtimes() -> [RuntimeSpec; 3] {
+/// The three runtime backends that execute checked concrete specifications.
+fn runtime_backends() -> [RuntimeSpec; 3] {
     [
         RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
         RuntimeSpec::SemiSync,
@@ -1079,56 +1366,780 @@ fn any_check_runtimes() -> [RuntimeSpec; 3] {
     ]
 }
 
-/// An `Any` value used where an `Int` is needed stops the monitor at the
-/// first value that is not an `Int`, with an error naming the type, the
-/// value and where it was used, in every runtime.
+/// A run with every input given one value at tick 0, in each runtime and
+/// checked runtime backend.
+fn run_one_tick_everywhere(
+    spec: &str,
+    inputs: &[(&str, Value)],
+    output: &str,
+) -> Vec<(String, Result<Vec<Value>, String>)> {
+    run_one_tick_everywhere_with(spec, inputs, output, |result| result)
+}
+
+/// [`run_one_tick_everywhere`], passing each run's result through `finish` as
+/// soon as that run ends.
+fn run_one_tick_everywhere_with(
+    spec: &str,
+    inputs: &[(&str, Value)],
+    output: &str,
+    finish: impl Fn(Result<Vec<Value>, String>) -> Result<Vec<Value>, String>,
+) -> Vec<(String, Result<Vec<Value>, String>)> {
+    let input: BTreeMap<VarName, Vec<Value>> = inputs
+        .iter()
+        .map(|(name, value)| (VarName::new(name), vec![value.clone()]))
+        .collect();
+    let runs: Vec<_> = runtime_backends()
+        .into_iter()
+        .map(|runtime| (runtime, Semantics::TypedUntimed))
+        .collect();
+    runs.into_iter()
+        .map(|(runtime, semantics)| {
+            (
+                format!("{runtime:?} {semantics:?}"),
+                finish(run_catching_panics(
+                    runtime, semantics, spec, &input, output,
+                )),
+            )
+        })
+        .collect()
+}
+
+/// A fixed point goes where `self` is needed, so a `self` that needs less of a
+/// fixed point than it gives runs on every runtime.
 #[test]
-fn test_a_wrongly_typed_any_value_stops_every_runtime_with_a_located_error() {
-    let input = BTreeMap::from([(
-        VarName::new("x"),
-        vec![Value::Int(1), Value::Float(1.5), Value::Int(3)],
-    )]);
-    for expression in ["x", "x + 1"] {
-        let spec = format!("in x\nout y: Int\ny = {expression}");
-        for runtime in any_check_runtimes() {
-            let error =
-                run_catching_panics(runtime, Semantics::GradualTypedUntimed, &spec, &input, "y")
-                    .expect_err("a Float where an Int is needed stops the monitor");
-            assert!(
-                error.contains("expected Int, got Float 1.5 at ")
-                    && error.contains(":3:5 (bytes ")
-                    && error.contains("`x`"),
-                "{runtime:?} on `y = {expression}`: {error}"
+fn test_a_fixed_point_flows_into_its_self_parameter_on_every_runtime() {
+    let record = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("b".into(), Value::Int(2)),
+    ]));
+    for (spec, input) in [
+        (
+            "in x: Struct<a: Int, b: Int>\nout y: Int = \
+             fix(\\self: (Struct<a: Int, b: Int> -> Int), s: Struct<a: Int, ...> -> s.a)(x)",
+            record,
+        ),
+        (
+            "in x: Int\nout y: Int = fix(\\self: (Int -> Int), n: Int -> n)(x)",
+            Value::Int(1),
+        ),
+    ] {
+        for (run, result) in run_one_tick_everywhere(spec, &[("x", input.clone())], "y") {
+            assert_eq!(result, Ok(vec![Value::Int(1)]), "{run} on `{spec}`");
+        }
+    }
+}
+
+/// As [`run_one_tick_everywhere`], where a panic is what stopped the run wherever
+/// it happened.
+fn run_one_tick_everywhere_with_panic_text(
+    spec: &str,
+    inputs: &[(&str, Value)],
+    output: &str,
+) -> Vec<(String, Result<Vec<Value>, String>)> {
+    panic_capture::start();
+    let runs = run_one_tick_everywhere_with(spec, inputs, output, |result| {
+        match panic_capture::take().into_iter().next() {
+            Some(text) => Err(format!("panicked: {text}")),
+            None => result,
+        }
+    });
+    panic_capture::stop();
+    runs
+}
+
+/// The whole text of each error checking gives `spec`.
+fn type_errors(spec: &str) -> Vec<String> {
+    type_check(spec.parse().expect("spec parses"))
+        .err()
+        .unwrap_or_else(|| panic!("`{spec}` should not check"))
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// A message says one thing about the program, where in it, in a sentence.
+#[test]
+fn test_type_error_messages_say_what_is_wrong_and_where() {
+    // A hint follows the sentence it belongs to.
+    assert_eq!(
+        type_errors("in x: Int\nout y: Struct<a: Float>\ny = {a: x}"),
+        [
+            "field a has type Int, expected Float; convert the Int explicitly with `as Float` \
+          at <string>:3:5 (bytes 38..44): `{a: x}`"
+        ]
+    );
+    // An unannotated input is declared, and missing its annotation there.
+    assert_eq!(
+        type_errors("in v\nout y: Int\ny = v"),
+        ["Variable v is missing a type annotation at <string>:1:1 (bytes 0..4): `in v`"]
+    );
+    let inferred = type_check(
+        "in x: Int\nout z\nout w: Int\nz = x\nw = z"
+            .parse()
+            .unwrap(),
+    )
+    .expect("acyclic output inference");
+    assert_eq!(
+        inferred.type_annotation(&VarName::new("z")),
+        Some(&StreamType::Int)
+    );
+    // Anything truly undeclared still is.
+    assert_eq!(
+        type_errors("out w: Int\nw = z"),
+        ["undeclared variable z at <string>:2:5 (bytes 15..16): `z`"]
+    );
+    // A tuple has numbered fields.
+    assert_eq!(
+        type_errors("in p: (Int, Int)\nout y: Int\ny = p.foo"),
+        ["tuple has no field foo at <string>:3:5 (bytes 32..37): `p.foo`"]
+    );
+    assert_eq!(
+        type_errors("in p: (Int, Int)\nout y: Int\ny = p.2"),
+        ["tuple index out of bounds at <string>:3:5 (bytes 32..35): `p.2`"]
+    );
+}
+
+/// A constant has the type it has, so one of another type is refused where it is
+/// used, whatever type is expected of it.
+#[test]
+fn test_a_constant_is_compared_with_what_is_expected_of_it() {
+    let inputs = [("x", Value::Int(1))];
+    for spec in [
+        "use experimental::{constants}\nin x: Int\nconst xs: List<Int> = [1, 2]\n\
+         out y: List<Str> = if x == 1 then xs else [\"\"]",
+        "use experimental::{constants}\nin x: Int\nconst xs: List<Int> = [1, 2]\n\
+         out y: List<Float> = if x == 1 then xs else [1.5]",
+        "use experimental::{constants}\nin x: Int\nconst m: Map<Int> = Map(\"a\": 1)\n\
+         out y: Int = if x == 1 then m else 1",
+        "use experimental::{constants}\nin x: Int\nconst m: Map<Int> = Map(\"a\": 1)\n\
+         out y: Map<Str> = if x == 1 then m else Map(\"b\": \"s\")",
+    ] {
+        for (run, result) in run_one_tick_everywhere_with_panic_text(spec, &inputs, "y") {
+            let error = result.expect_err(&format!("{run} should refuse: {spec}"));
+            assert!(error.contains("expected"), "{run}: {spec}: {error}");
+        }
+    }
+}
+
+/// What the result holds is still what a place holds it to: a literal takes the
+/// type expected of the result, whatever form the operand has.
+#[test]
+fn test_a_hint_still_gives_a_literal_its_type_at_any_depth() {
+    let spec = "in c: Bool\nout y: List<Float> = List.tail(if c then [1, 2] else [3, 4])";
+    for (run, result) in
+        run_one_tick_everywhere_with_panic_text(spec, &[("c", Value::Bool(true))], "y")
+    {
+        assert_eq!(
+            result,
+            Ok(vec![Value::List(vec![Value::Float(2.0)].into())]),
+            "{run}"
+        );
+    }
+}
+
+/// A fold's annotated accumulator holds what it says: the initial value is checked
+/// at it where the value is written, and the callback's result is compared with it.
+#[test]
+fn test_a_fold_accumulator_holds_what_its_annotation_says() {
+    for expression in [
+        "List.fold(\\a: Int, e: Int -> a + e, x, [1])",
+        "List.fold(\\a: Int, e: Int -> a + e, x, [])",
+    ] {
+        let spec = format!("in x: Int\nout y: Int = {expression}");
+        let expected = if expression.ends_with("[])") { 2 } else { 3 };
+        for (runtime, result) in run_one_tick_everywhere(&spec, &[("x", Value::Int(2))], "y") {
+            assert_eq!(result, Ok(vec![Value::Int(expected)]), "{runtime}: {spec}");
+        }
+    }
+    for expression in [
+        "List.fold(\\a: Int, e: Int -> a == e, x, [1])",
+        "List.fold(\\a: Int, e: Int -> \"s\", x, [1])",
+    ] {
+        let spec = format!("in x: Int\nout y: Int = {expression}");
+        let errors = type_check(spec.parse().unwrap())
+            .expect_err("fold result must retain accumulator type");
+        assert!(format!("{errors:?}").contains("Int"));
+    }
+}
+
+/// An integer literal put into a concrete Float collection takes its context,
+/// so a spec that can succeed does.
+#[test]
+fn test_a_literal_added_to_a_collection_takes_the_type_expected_of_the_result() {
+    let floats = |values: &[f64]| {
+        Value::List(
+            values
+                .iter()
+                .map(|value| Value::Float(*value))
+                .collect::<Vec<_>>()
+                .into(),
+        )
+    };
+    let map = |entries: Vec<(&str, f64)>| {
+        Value::Map(ValueMap::from_iter(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key.into(), Value::Float(value))),
+        ))
+    };
+    for (spec, input, expected) in [
+        (
+            "in xs: List<Float>\nout y: List<Float> = List.append(xs, 1)",
+            floats(&[1.5]),
+            floats(&[1.5, 1.0]),
+        ),
+        (
+            "in xs: List<Float>\nout y: List<Float> = List.tail(List.append(xs, 1))",
+            floats(&[1.5]),
+            floats(&[1.0]),
+        ),
+        (
+            "in xs: Map<Float>\nout y: Map<Float> = Map.insert(xs, \"b\", 1)",
+            map(vec![("a", 1.5)]),
+            map(vec![("a", 1.5), ("b", 1.0)]),
+        ),
+    ] {
+        for (run, result) in run_one_tick_everywhere_with_panic_text(spec, &[("xs", input)], "y") {
+            assert_eq!(result, Ok(vec![expected.clone()]), "{run}: {spec}");
+        }
+    }
+    // Nested collection literals receive the known inner Float type.
+    let spec = "in xs: List<List<Float>>\nout y: List<List<Float>> = List.append(xs, [1])";
+    let input = Value::List(vec![floats(&[1.5])].into());
+    let expected = Value::List(vec![floats(&[1.5]), floats(&[1.0])].into());
+    for (run, result) in run_one_tick_everywhere_with_panic_text(spec, &[("xs", input)], "y") {
+        assert_eq!(result, Ok(vec![expected.clone()]), "{run}");
+    }
+    // A collection that says what it holds keeps saying it.
+    let spec = "in xs: List<Int>\nout y: List<Int> = List.append(xs, 1.5)";
+    let input = Value::List(vec![Value::Int(1)].into());
+    for (run, result) in run_one_tick_everywhere_with_panic_text(spec, &[("xs", input)], "y") {
+        let error = result.expect_err(&format!("{run} should refuse"));
+        assert!(error.contains("expected Int, got Float"), "{run}: {error}");
+    }
+}
+
+/// The order of what merges does not change a value: a literal beside a `Float` is a
+/// `Float` only where everything merged is a number.
+#[test]
+fn test_the_order_of_a_merge_does_not_change_its_values() {
+    for (elements, expected) in [
+        (
+            "1, x, 2",
+            vec![Value::Float(1.0), Value::Float(2.5), Value::Float(2.0)],
+        ),
+        (
+            "2, x, 1",
+            vec![Value::Float(2.0), Value::Float(2.5), Value::Float(1.0)],
+        ),
+    ] {
+        let spec = format!("in x: Float\nout y: List<Float> = [{elements}]");
+        for (runtime, result) in
+            run_one_tick_everywhere_with_panic_text(&spec, &[("x", Value::Float(2.5))], "y")
+        {
+            assert_eq!(
+                result,
+                Ok(vec![Value::List(expected.clone().into())]),
+                "{runtime}: {elements}"
             );
         }
     }
 }
 
-/// An `Any` value of the type it is used at, or no value at all, behaves as
-/// it does where the input is declared with that type.
+/// A merge of functions taking different open structs is a function of a struct
+/// with the fields of both, so a stream of that type holds whichever was selected.
 #[test]
-fn test_a_well_typed_or_absent_any_value_runs_as_a_typed_one() {
-    let input = BTreeMap::from([(
-        VarName::new("x"),
-        vec![Value::Int(2), Value::NoVal, Value::Int(5)],
-    )]);
-    for (expression, first) in [("x", 2), ("x + 1", 3)] {
-        let gradual = format!("in x\nout y: Int\ny = {expression}");
-        let typed = format!("in x: Int\nout y: Int\ny = {expression}");
-        for runtime in any_check_runtimes() {
-            let checked = run_catching_panics(
-                runtime,
-                Semantics::GradualTypedUntimed,
-                &gradual,
-                &input,
-                "y",
+fn test_a_merge_of_functions_runs_the_one_selected_on_every_runtime() {
+    let spec = "in c: Bool\n\
+                in x: Struct<a: Int, b: Int>\n\
+                aux f1: (Struct<a: Int, ...> -> Int) = \\s: Struct<a: Int, ...> -> s.a\n\
+                aux f2: (Struct<b: Int, ...> -> Int) = \\s: Struct<b: Int, ...> -> s.b\n\
+                aux g: (Struct<a: Int, b: Int> -> Int) = if c then f1 else f2\n\
+                out y: Int = g(x)";
+    let record = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("b".into(), Value::Int(2)),
+    ]));
+    for (selected, expected) in [(true, 1), (false, 2)] {
+        let inputs = [("c", Value::Bool(selected)), ("x", record.clone())];
+        for (run, result) in run_one_tick_everywhere_with_panic_text(spec, &inputs, "y") {
+            assert_eq!(
+                result,
+                Ok(vec![Value::Int(expected)]),
+                "{run} at c = {selected}"
+            );
+        }
+    }
+}
+
+/// Live waypoint data carries more about a pose than the example reads, which
+/// does not stop it.
+#[test]
+fn test_the_waypoint_example_runs_on_poses_with_extra_fields() {
+    let spec = include_str!("../examples/pal_human_waypoint_safety.dsrv");
+    let pose = |x: f64, y: f64| {
+        Value::Map(ValueMap::from([
+            ("x".into(), Value::Float(x)),
+            ("y".into(), Value::Float(y)),
+            ("z".into(), Value::Float(0.5)),
+        ]))
+    };
+    let inputs = [
+        (
+            "new_data",
+            Value::Map(ValueMap::from([
+                ("event".into(), Value::Str("human".into())),
+                ("uid".into(), Value::Str("a".into())),
+            ])),
+        ),
+        (
+            "robot_1_waypoints",
+            Value::Map(ValueMap::from([
+                ("robot_id".into(), Value::Int(1)),
+                (
+                    "poses".into(),
+                    Value::List(vec![pose(1.0, 2.0), pose(3.0, 11.0)].into()),
+                ),
+            ])),
+        ),
+    ];
+    for (output, expected) in [
+        ("first_waypoint_in_limits", true),
+        ("all_waypoints_in_limits", false),
+    ] {
+        for (run, result) in run_one_tick_everywhere(spec, &inputs, output) {
+            let values = result.unwrap_or_else(|error| panic!("{run}: {error}"));
+            assert_eq!(
+                values.first(),
+                Some(&Value::Bool(expected)),
+                "{run}: {output}"
+            );
+        }
+    }
+}
+
+/// A checked run of `spec` on every runtime backend,
+/// with every input given one value at tick 0.
+fn run_one_tick_checked(
+    spec: &str,
+    inputs: &[(&str, Value)],
+    output: &str,
+) -> Vec<(String, Result<Vec<Value>, String>)> {
+    let input: BTreeMap<VarName, Vec<Value>> = inputs
+        .iter()
+        .map(|(name, value)| (VarName::new(name), vec![value.clone()]))
+        .collect();
+    runtime_backends()
+        .into_iter()
+        .map(|runtime| {
+            (
+                format!("{runtime:?}"),
+                run_catching_panics(runtime, Semantics::TypedUntimed, spec, &input, output),
             )
-            .unwrap_or_else(|error| panic!("{runtime:?} on `{expression}`: {error}"));
-            let declared =
-                run_catching_panics(runtime, Semantics::GradualTypedUntimed, &typed, &input, "y")
-                    .unwrap_or_else(|error| panic!("{runtime:?} on typed `{expression}`: {error}"));
-            assert_eq!(checked.first(), Some(&Value::Int(first)), "{runtime:?}");
-            assert_eq!(checked, declared, "{runtime:?} on `{expression}`");
+        })
+        .collect()
+}
+
+/// A stream with no annotation whose expression can never succeed is refused
+/// before it runs, as it is with an annotation, instead of being widened to
+/// another type and failing on its first value.
+#[test]
+fn test_an_unannotated_stream_with_a_contradiction_is_refused_on_every_runtime() {
+    let int = || Value::Int(1);
+    let text = || Value::Str("s".into());
+    for (spec, input, message) in [
+        (
+            "in x: Int\nout z\nz = !1\n",
+            int(),
+            "expected Bool, got Int",
+        ),
+        (
+            "in x: Int\nout z\nz = !x\n",
+            int(),
+            "expected Bool, got Int",
+        ),
+        (
+            "in x: Int\nout z\nz = if x then 1 else 2\n",
+            int(),
+            "expected Bool, got Int",
+        ),
+        (
+            "in x: Str\nout z\nz = sin(x)\n",
+            text(),
+            "expected Float, got Str",
+        ),
+        (
+            "in x: Str\nout z\nz = trunc(x)\n",
+            text(),
+            "expected Float, got Str",
+        ),
+        (
+            "in x: Str\nout z\nz = List.get([1], x)\n",
+            text(),
+            "expected Int, got Str",
+        ),
+        (
+            "in x: Str\nout z\nz = (\\n: Int -> n)(x)\n",
+            text(),
+            "expected Int, got Str",
+        ),
+        (
+            "in x: Int\nout z\nout w: Int\nz = !1\nw = z + 1\n",
+            int(),
+            "expected Bool, got Int",
+        ),
+    ] {
+        for (run, result) in run_one_tick_checked(spec, &[("x", input.clone())], "z") {
+            let error = result.expect_err(&format!("{run} should refuse `{spec}`"));
+            assert!(
+                error.starts_with("elaboration failed: ") && error.contains(message),
+                "{run} on `{spec}`: {error}"
+            );
+        }
+    }
+}
+
+/// Dependency ordering infers acyclic outputs; recursive roots need annotations.
+#[test]
+fn test_acyclic_output_inference_and_annotated_recursion_run() {
+    for (spec, expected) in [
+        ("in x: Int\nout a\nout b\na = b + 1\nb = x * 2", 3),
+        (
+            "in x: Int\nout a: Int\nout b: Int\na = default(b[1], 0) + x\nb = a",
+            1,
+        ),
+    ] {
+        for (runtime, result) in run_one_tick_checked(spec, &[("x", Value::Int(1))], "a") {
+            assert_eq!(result, Ok(vec![Value::Int(expected)]), "{runtime}: {spec}");
+        }
+    }
+    for source in [
+        "in x\nout y = x",
+        "in x: Int\nout a\nout b\na = default(b[1], 0) + x\nb = a",
+    ] {
+        assert!(type_check(source.parse().unwrap()).is_err(), "{source}");
+    }
+}
+
+/// A permissive struct holds the fields it was built with, so a literal's
+/// extra fields are compared, tested for and output in every runtime.
+#[test]
+fn test_a_literal_at_a_permissive_struct_type_keeps_its_extra_fields() {
+    let whole = |x: i64| {
+        Value::Map(ValueMap::from([
+            ("a".into(), Value::Int(x)),
+            ("b".into(), Value::Int(x)),
+        ]))
+    };
+    let declaration = "in x: Int\naux p: Struct<a: Int, ...>\np = {a: x, b: x}\n";
+    for (output, expected) in [
+        ("out t: Bool\nt = p == {a: x, b: x}", Value::Bool(true)),
+        // The extra field makes `p` differ from a literal that lacks it.
+        ("out t: Bool\nt = p != {a: x}", Value::Bool(true)),
+        ("out t: Struct<a: Int, ...>\nt = {a: x, b: x}", whole(1)),
+        (
+            "out t: Struct<a: Int, ...>\nt = Struct(\"a\": x, \"b\": x)",
+            whole(1),
+        ),
+        ("out t: Struct<a: Int, ...>\nt = p", whole(1)),
+    ] {
+        let spec = format!("{declaration}{output}\n");
+        for (run, result) in run_one_tick_everywhere(&spec, &[("x", Value::Int(1))], "t") {
+            assert_eq!(result, Ok(vec![expected.clone()]), "{run} on `{output}`");
+        }
+    }
+}
+
+/// Fields a struct type does not list are not readable, so `Map.has_key` of
+/// one is refused as `Map.get` of it is, before any runtime starts; a listed
+/// field is still found.
+#[test]
+fn test_has_key_of_a_field_a_struct_type_does_not_list_is_refused() {
+    let value = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("b".into(), Value::Int(1)),
+    ]));
+    for struct_type in ["Struct<a: Int, ...>", "Struct<a: Int>"] {
+        for (call, result_type) in [
+            ("Map.get(p, \"b\")", "Int"),
+            ("Map.has_key(p, \"b\")", "Bool"),
+        ] {
+            let spec = format!("in p: {struct_type}\nout t: {result_type}\nt = {call}\n");
+            for (run, result) in run_one_tick_everywhere(&spec, &[("p", value.clone())], "t") {
+                let error = result.expect_err(&format!("{run}: {call} at {struct_type}"));
+                assert!(
+                    error.contains("elaboration failed")
+                        && error.contains("StructFieldAccess")
+                        && error.contains("Struct has no field with this name"),
+                    "{run}: {call} at {struct_type}: {error}"
+                );
+            }
+        }
+    }
+    for (struct_type, value) in [
+        ("Struct<a: Int, ...>", value),
+        (
+            "Struct<a: Int>",
+            Value::Map(ValueMap::from([("a".into(), Value::Int(1))])),
+        ),
+    ] {
+        let spec = format!("in p: {struct_type}\nout t: Bool\nt = Map.has_key(p, \"a\")\n");
+        for (run, result) in run_one_tick_everywhere(&spec, &[("p", value.clone())], "t") {
+            assert_eq!(result, Ok(vec![Value::Bool(true)]), "{run}: {struct_type}");
+        }
+    }
+}
+
+/// A closed struct type has exactly its own fields, so nothing changes there.
+#[test]
+fn test_a_literal_at_a_closed_struct_type_has_exactly_its_fields() {
+    let spec = "in x: Int\nout t: Struct<a: Int, b: Int>\nt = {b: x, a: x}\n";
+    let expected = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("b".into(), Value::Int(1)),
+    ]));
+    for (run, result) in run_one_tick_everywhere(spec, &[("x", Value::Int(1))], "t") {
+        assert_eq!(result, Ok(vec![expected.clone()]), "{run}");
+    }
+}
+
+/// An open struct is not a closed struct with more fields: the program is
+/// refused before any runtime starts, rather than reading a missing field.
+/// A closed struct is accepted at an open one, and runs as it is.
+#[test]
+fn test_an_open_struct_is_refused_at_a_closed_struct_needing_more_fields() {
+    let open = Value::Map(ValueMap::from([("a".into(), Value::Int(1))]));
+    let spec = "in s: Struct<a: Int, ...>\nout t: Struct<a: Int, b: Int>\nout z: Int\n\
+                t = s\nz = t.b\n";
+    for (run, result) in run_one_tick_everywhere(spec, &[("s", open.clone())], "z") {
+        let error = result.expect_err(&format!("{run}: {{a: 1}} has no b"));
+        assert!(
+            error.contains("elaboration failed")
+                && error.contains("expected Struct<a: Int, b: Int>, got Struct<a: Int, ...>"),
+            "{run}: {error}"
+        );
+    }
+
+    let closed = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("b".into(), Value::Int(2)),
+    ]));
+    let spec = "in s: Struct<a: Int, b: Int>\nout t: Struct<a: Int, ...>\nt = s\n";
+    for (run, result) in run_one_tick_everywhere(spec, &[("s", closed.clone())], "t") {
+        assert_eq!(result, Ok(vec![closed.clone()]), "{run}");
+    }
+}
+
+/// Non-converting casts pass markers through on every runtime. Float/Str casts
+/// and def-result ascriptions keep their existing operand retention.
+#[test]
+fn test_casts_and_ascriptions_match_dataflow_marker_semantics() {
+    for (typ, first, last) in [
+        ("Int", Value::Int(1), Value::Int(2)),
+        ("Float", Value::Float(1.5), Value::Float(2.5)),
+        ("Str", Value::Str("a".into()), Value::Str("b".into())),
+        (
+            "List<Int>",
+            Value::List(vec![Value::Int(1)].into()),
+            Value::List(vec![Value::Int(2)].into()),
+        ),
+    ] {
+        let values = vec![
+            Value::NoVal,
+            first.clone(),
+            Value::NoVal,
+            Value::Deferred,
+            Value::NoVal,
+            last.clone(),
+        ];
+        let retained = vec![
+            Value::NoVal,
+            first.clone(),
+            first,
+            Value::Deferred,
+            Value::Deferred,
+            last,
+        ];
+        let input = BTreeMap::from([
+            (VarName::new("x"), values.clone()),
+            (
+                VarName::new("clock"),
+                (0..values.len())
+                    .map(|tick| Value::Int(tick as i64))
+                    .collect(),
+            ),
+        ]);
+        for expression in [format!("x as {typ}"), "identity(x)".to_owned()] {
+            let spec = format!(
+                "use experimental::functions\nin x: {typ}\nin clock: Int\n\
+                 def identity(v: {typ}) -> {typ} = v\n\
+                 out tick: Int = clock\nout y: {typ} = {expression}"
+            );
+            for runtime in runtime_backends() {
+                for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
+                    let actual = run_catching_panics(runtime, semantics, &spec, &input, "y")
+                        .unwrap_or_else(|error| {
+                            panic!("{runtime:?} {semantics:?}: {spec}: {error}")
+                        });
+                    let expected =
+                        if expression.starts_with("x as ") && !matches!(typ, "Float" | "Str") {
+                            &values
+                        } else {
+                            &retained
+                        };
+                    assert_eq!(&actual, expected, "{runtime:?} {semantics:?}: {spec}");
+                }
+            }
+        }
+    }
+}
+
+/// An open struct cannot flow into a closed struct, even one listing the same
+/// fields, since its value may have others: the closed value is built instead.
+#[test]
+fn test_an_open_struct_is_refused_at_a_closed_struct_listing_the_same_fields() {
+    let value = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("b".into(), Value::Int(2)),
+    ]));
+    let spec = "in s: Struct<a: Int, ...>\nout t: Struct<a: Int>\nt = s\n";
+    for (run, result) in run_one_tick_everywhere(spec, &[("s", value.clone())], "t") {
+        let error = result.expect_err(&format!("{run}: an open struct at a closed one"));
+        assert!(
+            error.contains("elaboration failed")
+                && error.contains("expected Struct<a: Int>, got Struct<a: Int, ...>"),
+            "{run}: {error}"
+        );
+    }
+    let spec = "in s: Struct<a: Int, ...>\nout t: Struct<a: Int>\nt = {a: s.a}\n";
+    let built = Value::Map(ValueMap::from([("a".into(), Value::Int(1))]));
+    for (run, result) in run_one_tick_everywhere(spec, &[("s", value.clone())], "t") {
+        assert_eq!(result, Ok(vec![built.clone()]), "{run}");
+    }
+}
+
+/// Merging an open struct with one that lists more fields keeps the fields
+/// both list. The others may be absent, so reading one is refused before any
+/// runtime starts, in either branch order; what the fields hold stays.
+#[test]
+fn test_merged_open_structs_use_the_explicit_common_target() {
+    let declarations = "in c: Bool\nin s1: Struct<a: Int, b: Int, ...>\n\
+                        in s2: Struct<a: Int, ...>\nin s3: Struct<a: Int, d: Int, ...>\n";
+    let inputs = [
+        ("c", Value::Bool(true)),
+        (
+            "s1",
+            Value::Map(ValueMap::from([
+                ("a".into(), Value::Int(1)),
+                ("b".into(), Value::Int(2)),
+            ])),
+        ),
+        (
+            "s2",
+            Value::Map(ValueMap::from([("a".into(), Value::Int(3))])),
+        ),
+        (
+            "s3",
+            Value::Map(ValueMap::from([
+                ("a".into(), Value::Int(4)),
+                ("d".into(), Value::Int(5)),
+            ])),
+        ),
+    ];
+    for branches in [
+        "c then s1 else s2",
+        "c then s2 else s1",
+        "c then s1 else s3",
+    ] {
+        let spec = format!(
+            "{declarations}aux common: Struct<a: Int, ...> = if {branches}\nout y: Int = common.b"
+        );
+        for (run, result) in run_one_tick_everywhere(&spec, &inputs, "y") {
+            let error = result.expect_err(&format!("{run} on `{branches}`"));
+            assert!(
+                error.contains("elaboration failed")
+                    && error.contains("Struct has no field with this name"),
+                "{run} on `{branches}`: {error}"
+            );
+        }
+    }
+    let spec = format!(
+        "{declarations}aux common: Struct<a: Int, ...> = if c then s1 else s3\nout y: Int = common.a"
+    );
+    for (run, result) in run_one_tick_everywhere(&spec, &inputs, "y") {
+        assert_eq!(result, Ok(vec![Value::Int(1)]), "{run}");
+    }
+    // The value is the branch's, with its other fields carried along.
+    let spec = format!("{declarations}out y: Struct<a: Int, ...>\ny = if c then s1 else s2");
+    for (run, result) in run_one_tick_everywhere(&spec, &inputs, "y") {
+        assert_eq!(result, Ok(vec![inputs[1].1.clone()]), "{run}");
+    }
+}
+
+/// A pattern without `..` that leaves out a field of a closed struct would
+/// fall through to the next arm for every value, so it is refused before any
+/// runtime starts; `..` or naming every field keeps it valid.
+#[test]
+fn test_a_struct_pattern_omitting_fields_of_a_closed_struct_is_refused() {
+    let both = Value::Map(ValueMap::from([
+        ("a".into(), Value::Int(1)),
+        ("b".into(), Value::Int(2)),
+    ]));
+    let spec = |ty: &str, arm: &str| {
+        format!(
+            "use experimental::pattern_matching\nin s: {ty}\nout y: Int\n\
+             y = match(s) {{ {arm} -> v, _ -> -1, }}\n"
+        )
+    };
+    let closed = "Struct<a: Int, b: Int>";
+    for (run, result) in
+        run_one_tick_everywhere(&spec(closed, "{ a: v }"), &[("s", both.clone())], "y")
+    {
+        let error = result.expect_err(&format!("{run}: {{ a: v }} omits b"));
+        assert!(
+            error.contains("elaboration failed")
+                && error.contains("PatternTypeMismatch")
+                && error.contains("leaves out `b` of Struct<a: Int, b: Int>"),
+            "{run}: {error}"
+        );
+    }
+    // An open struct type promises only the fields it lists, so without `..`
+    // the pattern matches the values that have exactly those.
+    let only_a = Value::Map(ValueMap::from([("a".into(), Value::Int(1))]));
+    for (ty, arm, value, expected) in [
+        (closed, "{ a: v, .. }", &both, 1),
+        (closed, "{ a: v, b: _ }", &both, 1),
+        ("Struct<a: Int, ...>", "{ a: v }", &only_a, 1),
+        ("Struct<a: Int, ...>", "{ a: v }", &both, -1),
+    ] {
+        for (run, result) in run_one_tick_everywhere(&spec(ty, arm), &[("s", value.clone())], "y") {
+            assert_eq!(
+                result,
+                Ok(vec![Value::Int(expected)]),
+                "{run}: {arm} at {ty}"
+            );
+        }
+    }
+}
+
+/// An input that is absent, deferred, of unknown type or a struct is not
+/// checked when it arrives.
+#[test]
+fn test_markers_pass_the_typed_input_boundary() {
+    let spec = "in x: Int\nin c: Int\nout y: Int = default(x, c)";
+    for (inputs, expected) in [
+        (vec![("c", Value::Int(7))], Value::NoVal),
+        (
+            vec![("x", Value::NoVal), ("c", Value::Int(7))],
+            Value::NoVal,
+        ),
+        (
+            vec![("x", Value::Deferred), ("c", Value::Int(7))],
+            Value::Int(7),
+        ),
+    ] {
+        for (runtime, result) in run_one_tick_everywhere(spec, &inputs, "y") {
+            assert_eq!(result, Ok(vec![expected.clone()]), "{runtime}: {inputs:?}");
         }
     }
 }
@@ -1209,25 +2220,15 @@ fn admitted_programs(expressions: Vec<String>, arity: usize, minimum: usize) -> 
                 spec.parse::<DsrvSpecification>()
                     .unwrap_or_else(|error| panic!("matrix spec {spec:?} parses: {error:?}"))
             };
-            // Gradual checking infers the output type; strict checking then
-            // admits the program with that annotation, as a user would write.
-            let Ok(inferred) = parse(&spec(""))
-                .check(TypeCheckOptions::GRADUAL)
-                .into_parts()
-                .0
-            else {
+            // Infer once, then recheck the exported concrete annotation as a user would write it.
+            let Ok(inferred) = parse(&spec("")).check().into_parts().0 else {
                 continue;
             };
             let Some(output) = inferred.type_annotation(&VarName::new("result")).cloned() else {
                 continue;
             };
             let spec = spec(&format!(": {output}"));
-            if parse(&spec)
-                .check(TypeCheckOptions::STRICT)
-                .into_parts()
-                .0
-                .is_ok()
-            {
+            if parse(&spec).check().into_parts().0.is_ok() {
                 admitted.push(Program {
                     spec,
                     operands: operands.clone(),
@@ -1281,8 +2282,6 @@ fn assert_runs_in_every_configuration(
         ),
         (RuntimeSpec::Async, Semantics::Untimed),
         (RuntimeSpec::SemiSync, Semantics::Untimed),
-        (RuntimeSpec::Async, Semantics::GradualTypedUntimed),
-        (RuntimeSpec::SemiSync, Semantics::GradualTypedUntimed),
     ];
     let failures: Vec<_> = configurations
         .into_iter()
@@ -1380,7 +2379,7 @@ proptest::proptest! {
 }
 
 /// Two operands merged into one stream: with the same type the merge keeps it,
-/// and with different types it is `Any`.
+/// differing concrete types need a common explicit target.
 fn merge_expressions() -> Vec<String> {
     ["default(x, y)", "[x, y]", "if true then x else y"]
         .map(String::from)
@@ -1394,28 +2393,26 @@ proptest::proptest! {
     /// every runtime, and yields values of the type it inferred for it.
     #[test]
     fn test_checker_admitted_merges_run_in_every_runtime(
-        (spec, output, input) in admitted_runs(admitted_programs(merge_expressions(), 2, 40)),
+        (spec, output, input) in admitted_runs(admitted_programs(merge_expressions(), 2, ScalarType::ALL.len() * 3)),
     ) {
         assert_runs_in_every_configuration(&spec, &output, input)?;
     }
 }
 
 #[apply(async_test)]
-async fn test_gradual_typed_runtime_infers_unannotated_output(
+async fn test_checked_runtime_infers_unannotated_output(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
-    // The output `z` has no type annotation, so this spec is rejected by the
-    // strict typed-untimed semantics but accepted under gradual typing, where
-    // `z` is inferred as Int from its definition.
+    // A concrete input determines the unannotated output's Int type.
     let spec = "in x: Int\nout z\nz = x + 1";
 
     for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
-        let outputs = run_gradual_typed_runtime_with_spec(
+        let outputs = run_checked_runtime_with_spec(
             executor.clone(),
             runtime,
             spec,
             BTreeMap::from([("x".into(), vec![0.into(), 1.into(), 2.into()])]),
-            "gradual typed runtime outputs.collect()",
+            "checked runtime outputs.collect()",
         )
         .await?;
 
@@ -1426,151 +2423,18 @@ async fn test_gradual_typed_runtime_infers_unannotated_output(
                 (1, BTreeMap::from([("z".into(), Value::Int(2))])),
                 (2, BTreeMap::from([("z".into(), Value::Int(3))])),
             ],
-            "unexpected gradual typed outputs for runtime {runtime:?}",
+            "unexpected checked outputs for runtime {runtime:?}",
         );
     }
     Ok(())
 }
 
 #[apply(async_test)]
-async fn test_gradual_typed_runtime_casts_untyped_input(
+async fn test_checked_runtime_respects_explicit_annotations(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
-    // The input `x` has no annotation, so it is treated as Any and cast to Int
-    // at runtime where it is used in an integer addition.
-    let spec = "in x\nout z\nz = x + 1";
-
-    let outputs = run_gradual_typed_runtime_with_spec(
-        executor.clone(),
-        RuntimeSpec::Async,
-        spec,
-        BTreeMap::from([("x".into(), vec![41.into(), 1.into()])]),
-        "gradual typed any input outputs.collect()",
-    )
-    .await?;
-
-    assert_eq!(
-        outputs,
-        vec![
-            (0, BTreeMap::from([("z".into(), Value::Int(42))])),
-            (1, BTreeMap::from([("z".into(), Value::Int(2))])),
-        ]
-    );
-    Ok(())
-}
-
-#[apply(async_test)]
-async fn test_gradual_typed_runtime_accepts_explicit_any_annotations(
-    executor: Rc<LocalExecutor<'static>>,
-) -> anyhow::Result<()> {
-    // Explicit Any annotations should parse and execute through the same
-    // runtime-checked path as inferred Any expressions.
-    let spec = "in x: Any\nin y: Any\nout z: Any\nz = x + y";
-
-    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
-        let outputs = run_gradual_typed_runtime_with_spec(
-            executor.clone(),
-            runtime,
-            spec,
-            BTreeMap::from([
-                ("x".into(), vec![Value::Int(1), Value::Int(2)]),
-                ("y".into(), vec![Value::Int(3), Value::Float(0.5)]),
-            ]),
-            "gradual typed explicit Any outputs.collect()",
-        )
-        .await?;
-
-        assert_eq!(
-            outputs,
-            vec![
-                (0, BTreeMap::from([("z".into(), Value::Int(4))])),
-                (1, BTreeMap::from([("z".into(), Value::Float(2.5))])),
-            ],
-            "unexpected gradual explicit Any outputs for runtime {runtime:?}",
-        );
-    }
-    Ok(())
-}
-
-#[apply(async_test)]
-async fn test_gradual_typed_runtime_accepts_any_inside_list_annotation(
-    executor: Rc<LocalExecutor<'static>>,
-) -> anyhow::Result<()> {
-    // Any should also be accepted inside container annotations. This verifies
-    // parsing and runtime validation of a heterogeneous List<Any>.
-    let spec = "in xs: List<Any>\nout ys: List<Any>\nys = xs";
-
-    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
-        let outputs = run_gradual_typed_runtime_with_spec(
-            executor.clone(),
-            runtime,
-            spec,
-            BTreeMap::from([(
-                "xs".into(),
-                vec![Value::List(
-                    vec![Value::Int(1), Value::Str("robot".into())].into(),
-                )],
-            )]),
-            "gradual typed List<Any> outputs.collect()",
-        )
-        .await?;
-
-        assert_eq!(
-            outputs,
-            vec![(
-                0,
-                BTreeMap::from([(
-                    "ys".into(),
-                    Value::List(vec![Value::Int(1), Value::Str("robot".into())].into())
-                )]),
-            )],
-            "unexpected gradual List<Any> outputs for runtime {runtime:?}",
-        );
-    }
-    Ok(())
-}
-
-#[apply(async_test)]
-async fn test_gradual_typed_runtime_evaluates_any_plus_any(
-    executor: Rc<LocalExecutor<'static>>,
-) -> anyhow::Result<()> {
-    // Both inputs and the output are unannotated, so the expression remains
-    // Any + Any after type checking. The typed runtime must therefore evaluate
-    // the operation through the dynamic runtime path and check/dispatch against
-    // the actual Value types at each tick.
-    let spec = "in x\nin y\nout z\nz = x + y";
-
-    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
-        let outputs = run_gradual_typed_runtime_with_spec(
-            executor.clone(),
-            runtime,
-            spec,
-            BTreeMap::from([
-                ("x".into(), vec![Value::Int(1), Value::Int(2)]),
-                ("y".into(), vec![Value::Int(3), Value::Float(0.5)]),
-            ]),
-            "gradual typed any+any outputs.collect()",
-        )
-        .await?;
-
-        assert_eq!(
-            outputs,
-            vec![
-                (0, BTreeMap::from([("z".into(), Value::Int(4))])),
-                (1, BTreeMap::from([("z".into(), Value::Float(2.5))])),
-            ],
-            "unexpected gradual Any + Any outputs for runtime {runtime:?}",
-        );
-    }
-    Ok(())
-}
-
-#[apply(async_test)]
-async fn test_gradual_typed_runtime_respects_explicit_annotations(
-    executor: Rc<LocalExecutor<'static>>,
-) -> anyhow::Result<()> {
-    // Fully annotated specs should behave identically under gradual semantics.
-    let outputs = run_gradual_typed_runtime_with_spec(
+    // Concrete output annotations are checked before the runtime starts.
+    let outputs = run_checked_runtime_with_spec(
         executor.clone(),
         RuntimeSpec::Async,
         spec_simple_add_monitor_typed(),
@@ -1578,7 +2442,7 @@ async fn test_gradual_typed_runtime_respects_explicit_annotations(
             ("x".into(), vec![0.into(), 1.into(), 2.into()]),
             ("y".into(), vec![3.into(), 4.into(), 5.into()]),
         ]),
-        "gradual typed annotated outputs.collect()",
+        "checked annotated outputs.collect()",
     )
     .await?;
 
@@ -1594,42 +2458,27 @@ async fn test_gradual_typed_runtime_respects_explicit_annotations(
 }
 
 #[test]
-fn test_gradual_type_check_accepts_spec_rejected_by_strict() {
-    // Missing annotations are a hard error for the strict checker, but the
-    // gradual checker infers them.
-    let source = "in gsx\nout gsz\ngsz = gsx + 1";
-    let spec = (source)
-        .parse::<DsrvSpecification>()
-        .expect("test DSRV specification should parse");
-    assert!(
-        type_check(spec).is_err(),
-        "strict checker should reject missing annotations"
-    );
-    trustworthiness_checker::dsrv_fixtures::checked_with(source, TypeCheckOptions::GRADUAL);
-}
-
-#[test]
-fn test_gradual_type_check_rejects_annotated_mismatch() {
-    // A concrete static mismatch must remain an error under gradual typing.
+fn test_type_check_rejects_annotated_mismatch() {
+    // A concrete static mismatch is a checking error.
     let spec = ("out gbz: Bool\ngbz = 1 + 1")
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
-    assert!(type_check_gradual(spec).is_err());
+    assert!(type_check(spec).is_err());
 }
 
 #[apply(async_test)]
-async fn test_gradual_typed_runtime_inference_chain_out_of_order(
+async fn test_checked_runtime_inference_chain_out_of_order(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     // `gzb` is declared (and therefore visited) before `gza`, but depends on
-    // it; gradual inference must resolve the chain via its fixed-point pass.
+    // it; dependency ordering resolves the concrete acyclic chain.
     let spec = "in gx: Int\nout gzb\nout gza\ngzb = gza + 1\ngza = gx + 1";
-    let outputs = run_gradual_typed_runtime_with_spec(
+    let outputs = run_checked_runtime_with_spec(
         executor.clone(),
         RuntimeSpec::Async,
         spec,
         BTreeMap::from([("gx".into(), vec![0.into(), 1.into(), 2.into()])]),
-        "gradual chain outputs.collect()",
+        "checked chain outputs.collect()",
     )
     .await?;
 
@@ -1654,115 +2503,18 @@ async fn test_gradual_typed_runtime_inference_chain_out_of_order(
 }
 
 #[apply(async_test)]
-async fn test_gradual_typed_runtime_dyn_comparisons(
-    executor: Rc<LocalExecutor<'static>>,
-) -> anyhow::Result<()> {
-    // `gd` is untyped (Any); comparisons against an Int literal must cast it
-    // to Int at runtime and produce Bool outputs.
-    let spec = "in gd\nout geq\nout gle\ngeq = gd == 10\ngle = gd <= 10";
-    let outputs = run_gradual_typed_runtime_with_spec(
-        executor.clone(),
-        RuntimeSpec::Async,
-        spec,
-        BTreeMap::from([("gd".into(), vec![10.into(), 3.into(), 42.into()])]),
-        "gradual any comparison outputs.collect()",
-    )
-    .await?;
-
-    assert_eq!(
-        outputs,
-        vec![
-            (
-                0,
-                BTreeMap::from([
-                    ("geq".into(), Value::Bool(true)),
-                    ("gle".into(), Value::Bool(true)),
-                ])
-            ),
-            (
-                1,
-                BTreeMap::from([
-                    ("geq".into(), Value::Bool(false)),
-                    ("gle".into(), Value::Bool(true)),
-                ])
-            ),
-            (
-                2,
-                BTreeMap::from([
-                    ("geq".into(), Value::Bool(false)),
-                    ("gle".into(), Value::Bool(false)),
-                ])
-            ),
-        ]
-    );
-    Ok(())
-}
-
-#[apply(async_test)]
-async fn test_gradual_typed_runtime_dyn_float_arithmetic(
-    executor: Rc<LocalExecutor<'static>>,
-) -> anyhow::Result<()> {
-    // An untyped input used in float arithmetic is cast to Float at runtime
-    // and the output is inferred as Float.
-    let spec = "in gf\nout gg\ngg = gf + 1.5";
-    let outputs = run_gradual_typed_runtime_with_spec(
-        executor.clone(),
-        RuntimeSpec::Async,
-        spec,
-        BTreeMap::from([("gf".into(), vec![1.0.into(), 2.5.into()])]),
-        "gradual any float outputs.collect()",
-    )
-    .await?;
-
-    assert_eq!(
-        outputs,
-        vec![
-            (0, BTreeMap::from([("gg".into(), Value::Float(2.5))])),
-            (1, BTreeMap::from([("gg".into(), Value::Float(4.0))])),
-        ]
-    );
-    Ok(())
-}
-
-#[apply(async_test)]
-async fn test_gradual_typed_runtime_dyn_string_concat(
-    executor: Rc<LocalExecutor<'static>>,
-) -> anyhow::Result<()> {
-    // An untyped input used in string concatenation is cast to Str at runtime
-    // and the output is inferred as Str.
-    let spec = "in gs\nout gt\ngt = gs ++ \"!\"";
-    let outputs = run_gradual_typed_runtime_with_spec(
-        executor.clone(),
-        RuntimeSpec::Async,
-        spec,
-        BTreeMap::from([("gs".into(), vec!["a".into(), "b".into()])]),
-        "gradual any string outputs.collect()",
-    )
-    .await?;
-
-    assert_eq!(
-        outputs,
-        vec![
-            (0, BTreeMap::from([("gt".into(), Value::Str("a!".into()))])),
-            (1, BTreeMap::from([("gt".into(), Value::Str("b!".into()))])),
-        ]
-    );
-    Ok(())
-}
-
-#[apply(async_test)]
-async fn test_gradual_typed_runtime_if_expression_inference(
+async fn test_checked_runtime_if_expression_inference(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     // The unannotated output is inferred as Int from both branches of the
     // conditional expression.
     let spec = "in gc: Bool\nout gz\ngz = if gc then 1 else 2";
-    let outputs = run_gradual_typed_runtime_with_spec(
+    let outputs = run_checked_runtime_with_spec(
         executor.clone(),
         RuntimeSpec::Async,
         spec,
         BTreeMap::from([("gc".into(), vec![true.into(), false.into()])]),
-        "gradual if inference outputs.collect()",
+        "checked if inference outputs.collect()",
     )
     .await?;
 
@@ -1961,6 +2713,7 @@ structid = objstruct.id
                         Value::Map(ValueMap::from([
                             ("id".into(), Value::Int(11)),
                             ("label".into(), Value::Str("robot".into())),
+                            ("model".into(), Value::Str("extra".into())),
                         ])),
                     ),
                     ("structid".into(), Value::Int(11)),
@@ -1982,6 +2735,7 @@ structid = objstruct.id
                         Value::Map(ValueMap::from([
                             ("id".into(), Value::Int(12)),
                             ("label".into(), Value::Str("robot".into())),
+                            ("model".into(), Value::Str("extra".into())),
                         ])),
                     ),
                     ("structid".into(), Value::Int(12)),
@@ -2089,8 +2843,8 @@ async fn test_untyped_runtime_lambdas_partials_and_folds(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     let spec = r#"
-in xs
-in bias
+in xs: List<Int>
+in bias: Int
 out direct
 out mapped
 out filtered
@@ -2201,7 +2955,7 @@ echoed = payload
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(elaborate_for(spec, Semantics::TypedUntimed))
+        .model(elaborate(spec))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(RuntimeSpec::Async)
@@ -2522,8 +3276,9 @@ robot = Struct("id": 7)
 
     let errors = type_check(spec).expect_err("Struct constructor should not type-check as a Map");
     assert!(
-        errors.iter().any(|err| format!("{err:?}")
-            .contains("Struct constructor requires an expected Struct type")),
+        errors
+            .iter()
+            .any(|err| format!("{err:?}").contains("expected Map<Int>, got Struct<id: Int>")),
         "Expected a struct-constructor/map-assignment type error, got {errors:?}",
     );
 }
@@ -2534,11 +3289,11 @@ async fn test_untyped_runtime_struct_constructor_can_be_assigned_to_map(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = (r#"
-in tick
+in tick: Int
 out robot
 out id
 robot = Struct("id": tick + 7, "active": true)
-id = Map.get(robot, "id")
+id = robot.id
 "#)
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
@@ -2547,7 +3302,7 @@ id = Map.get(robot, "id")
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
         let monitor = create_builder_from_config(builder, config)
@@ -2591,13 +3346,13 @@ async fn test_untyped_runtime_struct_like_map_input_and_update(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = (r#"
-in robot
+in robot: Struct<id: Int, active: Bool, name: Str>
 out id
 out active
 out renamed
-id = Map.get(robot, "id")
-active = Map.get(robot, "active")
-renamed = Map.insert(robot, "name", "bb8")
+id = robot.id
+active = robot.active
+renamed = {id: robot.id, active: robot.active, name: "bb8"}
 "#)
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
@@ -2620,7 +3375,7 @@ renamed = Map.insert(robot, "name", "bb8")
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
         let monitor = create_builder_from_config(builder, config)
@@ -2821,9 +3576,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -2839,7 +3592,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2878,9 +3631,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -2896,7 +3647,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2935,9 +3686,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -2953,7 +3702,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2992,9 +3741,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -3010,7 +3757,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3049,9 +3796,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -3075,7 +3820,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3126,7 +3871,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        let spec_untyped = ("in x\nin y\nout z\nz = update(x, y)")
+        let spec_untyped = ("in x: Str\nin y: Str\nout z: Str\nz = update(x, y)")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -3137,7 +3882,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3175,7 +3920,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        let spec_untyped = ("in x\nin y\nout z\nz = update(x, y)")
+        let spec_untyped = ("in x: Str\nin y: Str\nout z: Str\nz = update(x, y)")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -3186,7 +3931,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3227,16 +3972,15 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
     for config in TestConfiguration::untyped_configurations() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = ("in x\nin e\nout z\nz = update(\"def\", defer(e))")
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec_untyped =
+            ("in x: Str\nin e: Expr<Str>\nout z: Str\nz = update(\"def\", defer(e))")
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
 
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
@@ -3245,7 +3989,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3286,14 +4030,12 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
     for config in TestConfiguration::untyped_configurations() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = ("in x\nin y\nout z\nz = defer(update(x, y))")
+        let spec_untyped = ("in x: Str\nin y: Str\nout z: Str\nz = defer(update(x, y))")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -3309,7 +4051,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3378,7 +4120,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3414,7 +4156,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3460,7 +4202,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3510,7 +4252,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3556,7 +4298,7 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3604,7 +4346,7 @@ async fn test_index_past_mult_dependencies(
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3662,7 +4404,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3708,7 +4450,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3753,7 +4495,7 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3802,7 +4544,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3851,7 +4593,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3897,7 +4639,7 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3957,7 +4699,7 @@ async fn test_simple_add_monitor_does_not_go_away(
             // Build base monitor with common settings
             let builder = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
-                .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+                .model(elaborate(spec_untyped.clone()))
                 .input(input_stream)
                 .output_writer(output_writer);
 
@@ -4011,7 +4753,7 @@ async fn test_simple_add_monitor_large_input(
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4079,7 +4821,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4123,7 +4865,7 @@ async fn test_simple_add_monitor_untyped_spec(
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec.clone(), config.semantics()))
+            .model(elaborate(spec.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4160,7 +4902,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
         if config == TestConfiguration::SemiSyncUntimed {
             continue;
         }
-        let spec = ("in x\nin e\nout z\nz = defer(e)")
+        let spec = ("in x: Int\nin e: Expr<Int>\nout z: Int\nz = defer(e)")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -4171,7 +4913,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec.clone(), config.semantics()))
+            .model(elaborate(spec.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4204,11 +4946,11 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
 #[apply(async_test)]
 async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        let spec = ("in x
-             in y
-             in s
-             out z
-             out w
+        let spec = ("in x: Int
+             in y: Int
+             in s: Expr<Int>
+             out z: Int
+             out w: Int
              z = x + y
              w = dynamic(s)")
             .parse::<DsrvSpecification>()
@@ -4219,7 +4961,7 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec.clone(), config.semantics()))
+            .model(elaborate(spec.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4269,7 +5011,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4288,10 +5030,8 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
         match config {
             TestConfiguration::AsyncUntimed
             | TestConfiguration::AsyncTypedUntimed
-            | TestConfiguration::AsyncGradualTypedUntimed
             | TestConfiguration::SemiSyncUntimed
-            | TestConfiguration::SemiSyncTypedUntimed
-            | TestConfiguration::SemiSyncGradualTypedUntimed => {
+            | TestConfiguration::SemiSyncTypedUntimed => {
                 assert_eq!(
                     result,
                     vec![
@@ -4318,7 +5058,7 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4366,7 +5106,7 @@ async fn test_count_monitor_sequential_dataflow_runs(
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
-                .model(elaborate_for(spec_untyped.clone(), semantics))
+                .model(elaborate(spec_untyped.clone()))
                 .input(input_stream)
                 .output_writer(output_writer)
                 .semantics(semantics)
@@ -4409,7 +5149,7 @@ async fn test_count_monitor_sequential_dataflow_runs(
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
-                .model(elaborate_for(spec_untyped.clone(), semantics))
+                .model(elaborate(spec_untyped.clone()))
                 .input(input_stream)
                 .output_writer(output_writer)
                 .semantics(semantics)
@@ -4530,7 +5270,7 @@ async fn test_dataflow_early_output_receiver_close(
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), semantics))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer)
             .semantics(semantics)
@@ -4578,7 +5318,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4625,7 +5365,7 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4670,7 +5410,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec.clone(), config.semantics()))
+            .model(elaborate(spec.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4739,7 +5479,7 @@ async fn test_revised_dynamic_source_replacement(
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec, config.semantics()))
+            .model(elaborate(spec))
             .input(input)
             .output_writer(output_writer);
         let monitor = create_builder_from_config(builder, config)
@@ -4778,7 +5518,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4817,7 +5557,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4861,7 +5601,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4923,7 +5663,7 @@ async fn test_restricted_dynamic_monitor(
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4968,9 +5708,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -4988,7 +5726,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -5044,9 +5782,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -5064,7 +5800,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -5120,9 +5856,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -5140,7 +5874,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -5196,9 +5930,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed
-                | TestConfiguration::SemiSyncTypedUntimed
-                | TestConfiguration::SemiSyncGradualTypedUntimed
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -5216,7 +5948,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -5281,7 +6013,7 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
+            .model(elaborate(spec_untyped.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -5372,7 +6104,7 @@ async fn test_benchmark_regression_long_add_defer(
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec.clone(), config.semantics()))
+            .model(elaborate(spec.clone()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -5409,7 +6141,7 @@ async fn test_map_get_deferred_propagates(
     for config in TestConfiguration::untyped_configurations() {
         // Map.get should propagate Deferred rather than panicking when the map
         // input stream carries a Deferred tick.
-        let spec = ("in m\nout z\nz = Map.get(m, \"x\")")
+        let spec = ("in m: Map<Int>\nout z: Int\nz = Map.get(m, \"x\")")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -5426,7 +6158,7 @@ async fn test_map_get_deferred_propagates(
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(elaborate_for(spec, config.semantics()))
+            .model(elaborate(spec))
             .input(input_stream)
             .output_writer(output_writer);
         let builder = create_builder_from_config(builder, config);
@@ -5548,19 +6280,13 @@ mod reconf_tests {
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
-            .model(elaborate_for(spec.clone(), Semantics::TypedUntimed))
+            .model(elaborate(spec.clone()))
             .input_pipeline(InputPipeline::new(input_factory))
             .expect("channel input factory should support reconfiguration")
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
-            .prepare_replacement(
-                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                    trustworthiness_checker::runtime::builder::type_check_options(
-                        Semantics::TypedUntimed,
-                    ),
-                ),
-            )
+            .prepare_replacement(trustworthiness_checker::dsrv_fixtures::replacement_preparation())
             .reconf_topic(RECONF_TOPIC.into())
             .build()
             .await
@@ -5641,19 +6367,13 @@ mod reconf_tests {
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
-            .model(elaborate_for(spec.clone(), Semantics::TypedUntimed))
+            .model(elaborate(spec.clone()))
             .input_pipeline(InputPipeline::new(input_factory))
             .expect("channel input factory should support reconfiguration")
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
-            .prepare_replacement(
-                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                    trustworthiness_checker::runtime::builder::type_check_options(
-                        Semantics::TypedUntimed,
-                    ),
-                ),
-            )
+            .prepare_replacement(trustworthiness_checker::dsrv_fixtures::replacement_preparation())
             .reconf_topic(RECONF_TOPIC.into())
             .build()
             .await
@@ -5691,11 +6411,7 @@ mod reconf_tests {
     ) {
         let source_text = "in x: Int\nout z: Int\nz = x + 1";
 
-        for semantics in [
-            Semantics::Untimed,
-            Semantics::TypedUntimed,
-            Semantics::GradualTypedUntimed,
-        ] {
+        for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
             let spec = source_text
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
@@ -5713,16 +6429,14 @@ mod reconf_tests {
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(ex.clone())
-                .model(elaborate_for(spec, semantics))
+                .model(elaborate(spec))
                 .input_pipeline(InputPipeline::new(input_source))
                 .expect("channel input source should support reconfiguration")
                 .output_pipeline(output_pipeline)
                 .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
                 .semantics(semantics)
                 .prepare_replacement(
-                    trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                        trustworthiness_checker::runtime::builder::type_check_options(semantics),
-                    ),
+                    trustworthiness_checker::dsrv_fixtures::replacement_preparation(),
                 )
                 .acknowledgements(ack_tx)
                 // No CLI/topic override: the configured source route must be retained.
@@ -5766,7 +6480,7 @@ mod reconf_tests {
     async fn test_general_builder_propagates_reconf_dataflow_execution_policy(
         ex: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = "in x\nout z\nz = x"
+        let spec = "in x: Int\nout z\nz = x"
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let (input_source, mut tx_fans) = channel_input_source(["x"]);
@@ -5774,19 +6488,13 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
-            .model(elaborate_for(spec, Semantics::Untimed))
+            .model(elaborate(spec))
             .input_pipeline(InputPipeline::new(input_source))
             .expect("channel input source should support reconfiguration")
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Buffered))
             .semantics(Semantics::Untimed)
-            .prepare_replacement(
-                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                    trustworthiness_checker::runtime::builder::type_check_options(
-                        Semantics::Untimed,
-                    ),
-                ),
-            )
+            .prepare_replacement(trustworthiness_checker::dsrv_fixtures::replacement_preparation())
             .build()
             .await
             .expect("general runtime builder should succeed");
@@ -5835,7 +6543,7 @@ mod reconf_tests {
     async fn test_general_builder_reports_in_memory_reconfiguration_error(
         ex: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = "in x\nout z\nz = x"
+        let spec = "in x: Int\nout z\nz = x"
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let input =
@@ -5845,19 +6553,13 @@ mod reconf_tests {
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex)
-            .model(elaborate_for(spec, Semantics::Untimed))
+            .model(elaborate(spec))
             .input_pipeline(InputPipeline::new(input))
             .expect("input pipeline should be accepted by the public builder")
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Buffered))
             .semantics(Semantics::Untimed)
-            .prepare_replacement(
-                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                    trustworthiness_checker::runtime::builder::type_check_options(
-                        Semantics::Untimed,
-                    ),
-                ),
-            )
+            .prepare_replacement(trustworthiness_checker::dsrv_fixtures::replacement_preparation())
             .build()
             .await
             .expect("general runtime builder should succeed");
@@ -5878,11 +6580,7 @@ mod reconf_tests {
     ) {
         let source = "in x: Int\nout z: Int\nz = x[1]";
 
-        for semantics in [
-            Semantics::Untimed,
-            Semantics::TypedUntimed,
-            Semantics::GradualTypedUntimed,
-        ] {
+        for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
             let spec = source
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
@@ -5893,16 +6591,14 @@ mod reconf_tests {
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(ex.clone())
-                .model(elaborate_for(spec, semantics))
+                .model(elaborate(spec))
                 .input_pipeline(InputPipeline::new(input_source))
                 .expect("channel input source should support reconfiguration")
                 .output_pipeline(output_pipeline)
                 .runtime(RuntimeSpec::ReconfSemiSync)
                 .semantics(semantics)
                 .prepare_replacement(
-                    trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                        trustworthiness_checker::runtime::builder::type_check_options(semantics),
-                    ),
+                    trustworthiness_checker::dsrv_fixtures::replacement_preparation(),
                 )
                 .reconf_topic(RECONF_TOPIC.into())
                 .use_context_transfer(false)
@@ -5972,7 +6668,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                .prepare_replacement(replacement_preparation())
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -6095,7 +6791,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                .prepare_replacement(replacement_preparation())
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -6213,7 +6909,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                .prepare_replacement(replacement_preparation())
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -6306,7 +7002,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                .prepare_replacement(replacement_preparation())
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -6405,7 +7101,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                .prepare_replacement(replacement_preparation())
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -6509,7 +7205,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                .prepare_replacement(replacement_preparation())
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -6539,7 +7235,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "specification": "in x\nout z\nz = x[1] + 1"
+            "specification": "in x: Int\nout z\nz = x[1] + 1"
         })
         .to_string();
 
@@ -6585,12 +7281,12 @@ mod reconf_tests {
         // Runs twice: once with context transfer, once without.
 
         for use_context_transfer in [true, false] {
-            let first_spec = "in x\n\
+            let first_spec = "in x: Int\n\
             out y\n\
             out z\n\
             y = x\n\
             z = y[1]";
-            let second_spec = "in x\n\
+            let second_spec = "in x: Int\n\
             out y\n\
             out z\n\
             y = x\n\
@@ -6623,7 +7319,7 @@ mod reconf_tests {
                 OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                    .prepare_replacement(replacement_preparation())
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
@@ -6740,7 +7436,7 @@ mod reconf_tests {
                 OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                    .prepare_replacement(replacement_preparation())
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
@@ -6771,7 +7467,7 @@ mod reconf_tests {
 
             info!("Finished pre-reconf phase, now sending reconf");
             let reconf_json = serde_json::json!({
-                "specification": "in x\nout z\nz = default(z[1], 0) + 1 + x - x"
+                "specification": "in x: Int\nout z: Int\nz = default(z[1], 0) + 1 + x - x"
             })
             .to_string();
 
@@ -6821,13 +7517,13 @@ mod reconf_tests {
         // output. Runs twice: once with context transfer, once without.
 
         for use_context_transfer in [true, false] {
-            let first_spec = "in x\n\
-            aux w\n\
+            let first_spec = "in x: Int\n\
+            aux w: Int\n\
             out z\n\
             w = default(w[1], 0) + 1\n\
             z = w + x - x";
-            let second_spec = "in x\n\
-            aux w\n\
+            let second_spec = "in x: Int\n\
+            aux w: Int\n\
             out z\n\
             w = default(w[1], 0) + 2\n\
             z = w + x - x";
@@ -6859,7 +7555,7 @@ mod reconf_tests {
                 OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                    .prepare_replacement(replacement_preparation())
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
@@ -6939,14 +7635,14 @@ mod reconf_tests {
         // it after reconfiguration. Runs twice: once with context transfer, once without.
 
         for use_context_transfer in [true, false] {
-            let first_spec = "in x\n\
+            let first_spec = "in x: Int\n\
             aux scaled\n\
             aux prev\n\
             out z\n\
             scaled = x * 10\n\
             prev = scaled[1]\n\
             z = prev";
-            let second_spec = "in x\n\
+            let second_spec = "in x: Int\n\
             aux scaled\n\
             aux prev\n\
             out z\n\
@@ -6981,7 +7677,7 @@ mod reconf_tests {
                 OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                    .prepare_replacement(replacement_preparation())
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
@@ -7051,5 +7747,63 @@ mod reconf_tests {
                 assert_eq!(z_res, z_exp);
             }
         }
+    }
+}
+
+#[test]
+fn expression_source_annotations_run_literals_and_strings() {
+    for (expression, expected) in [
+        ("\"-42\" as Expr<Int>", Value::Int(-42)),
+        ("source as Expr<Int>", Value::Int(3)),
+    ] {
+        let spec = format!("in x: Int\nin source: Str\nout y = eval({expression}) + x - x");
+        let inputs = [("x", Value::Int(1)), ("source", Value::Str("x + 2".into()))];
+        for (run, result) in run_one_tick_everywhere_with_panic_text(&spec, &inputs, "y") {
+            assert_eq!(result, Ok(vec![expected.clone()]), "{run}: {expression}");
+        }
+    }
+}
+
+#[test]
+fn inline_expression_fallback_matches_a_typed_auxiliary() {
+    for (declaration, fallback) in [
+        ("aux fallback: Expr<Int> = \"-42\"\n", "fallback"),
+        ("", "\"-42\" as Expr<Int>"),
+    ] {
+        let spec = format!(
+            "in x: Int\nin e: Expr<Int>\n{declaration}out y = eval(default(e, {fallback})) + x - x"
+        );
+        for (run, result) in run_one_tick_everywhere_with_panic_text(
+            &spec,
+            &[("x", Value::Int(1)), ("e", Value::Deferred)],
+            "y",
+        ) {
+            if run.starts_with("Dataflow") {
+                // Dataflow requires a named expression-source producer in both cases.
+                assert!(
+                    result
+                        .unwrap_err()
+                        .contains("expression sources must be constants or environment values")
+                );
+            } else {
+                assert_eq!(result, Ok(vec![Value::Int(-42)]), "{run}: {fallback}");
+            }
+        }
+    }
+}
+
+#[test]
+fn expression_source_annotations_still_check_the_text_when_evaluated() {
+    let source = "in source: Str\nout y = eval(source as Expr<Int>)";
+    for (run, result) in run_one_tick_everywhere_with_panic_text(
+        source,
+        &[("source", Value::Str("true".into()))],
+        "y",
+    ) {
+        let failure = result.expect_err("the annotation cannot admit a Bool result as Int");
+        assert!(
+            failure.contains("expected Int") && failure.contains("Bool"),
+            "{run}: {failure}"
+        );
     }
 }

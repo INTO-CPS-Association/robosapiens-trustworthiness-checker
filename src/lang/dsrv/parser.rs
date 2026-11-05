@@ -642,10 +642,7 @@ mod source_tests {
                 "{short}"
             );
         }
-        crate::dsrv_fixtures::checked_with(
-            &format!("{declarations}o = {{x, label}}"),
-            crate::lang::dsrv::TypeCheckOptions::STRICT,
-        );
+        crate::dsrv_fixtures::checked(&format!("{declarations}o = {{x, label}}"));
 
         assert!(matches!(
             parse_str(&format!("{declarations}o = {{x, x: 1}}")),
@@ -1106,7 +1103,7 @@ mod tests {
                     BinaryOperator::Add,
                 ),
             )]),
-            BTreeMap::new(),
+            BTreeMap::from([("x".into(), StreamType::Int), ("y".into(), StreamType::Int)]),
             Vec::<VarName>::new(),
         );
         let spec = parse_str(input);
@@ -2364,11 +2361,8 @@ mod tests {
         for literal in ["1e2.3", "1.2e3.4"] {
             let source = format!("out result: Float\nresult = {literal}");
             assert!(
-                crate::CheckedDsrvSpecification::parse_with(
-                    &source,
-                    crate::TypeCheckOptions::STRICT
-                )
-                .map_or(true, |report| report.result().is_err()),
+                crate::CheckedDsrvSpecification::parse(&source)
+                    .map_or(true, |report| report.result().is_err()),
                 "{literal} must not be accepted as a valid typed specification"
             );
         }
@@ -2898,7 +2892,7 @@ mod spec_tests {
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_monitor(),
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), Add)}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), Add)}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {

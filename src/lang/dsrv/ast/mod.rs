@@ -25,8 +25,8 @@ mod analysis;
 mod display;
 
 pub(crate) use analysis::DependencyKind;
+pub(crate) use checked::ExprTypes;
 pub use checked::{CheckedExpr, CheckedExprRef};
-pub(crate) use checked::{ExprTypes, ExprTypesBuilder};
 
 pub use expression::{
     Expr, ExprId, ExprRef, ExprView, ReconfigurableExprScope, SyntaxLiteral, SyntaxLiteralError,
@@ -34,7 +34,7 @@ pub use expression::{
 };
 pub(crate) use expression::{
     ExprArena, ExprBuilder, ExprFieldRefs, ExprForest, ExprForestMap, ExprKind, ExprMetadata,
-    ExprRefs, ExprRewriteNode,
+    ExprRewriteNode,
 };
 
 pub(crate) use specification::UnvalidatedDsrvSpecification;

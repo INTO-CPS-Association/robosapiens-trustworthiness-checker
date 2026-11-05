@@ -19,7 +19,8 @@ use crate::core::{
 use crate::lang::dsrv::ast::Expr;
 use crate::lang::dsrv::ast::{CheckedExpr, ExprRef, ExprView, SyntaxLiteral};
 use crate::lang::dsrv::runtime_expression::UntypedExpr;
-use crate::lang::dsrv::type_checker::TCType;
+
+use crate::core::StreamType;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 use tracing::debug;
 
@@ -140,19 +141,16 @@ where
             eval_list_fold::<AC>(own_child(func), own_child(init), own_child(list), ctx)
         }
         Map(map) | Struct(map) | ObjectLiteral(map) => {
-            let checked_type = expression.typ(node);
-            let map: BTreeMap<_, _> = map
-                .iter()
-                .filter(|(name, _)| field_survives_checked_projection(checked_type, name))
-                .map(|(k, v)| (k.clone(), evaluate(v)))
-                .collect();
+            let map: BTreeMap<_, _> = map.iter().map(|(k, v)| (k.clone(), evaluate(v))).collect();
             mc::map(map)
         }
         SGet(value, key) => {
             let value_type = expression.typ(value).cloned();
             let value = evaluate(value);
             match (value_type, key.parse::<usize>()) {
-                (Some(TCType::Tuple(_)), Ok(index)) | (None, Ok(index)) => mc::tget(value, index),
+                (Some(StreamType::Tuple(_)), Ok(index)) | (None, Ok(index)) => {
+                    mc::tget(value, index)
+                }
                 _ => mc::mget(value, key.clone()),
             }
         }
@@ -163,15 +161,6 @@ where
             unimplemented!("Function dist only supported in distributed semantics")
         }
         _ => unreachable!("shared DSRV expression was not dispatched"),
-    }
-}
-
-/// Width-subtyping projects checked structs to their declared runtime shape.
-/// Maps, object literals, and unchecked expressions retain every field.
-fn field_survives_checked_projection(typ: Option<&TCType>, name: &str) -> bool {
-    match typ {
-        Some(TCType::Struct(fields, _)) => fields.iter().any(|(field, _)| field == name),
-        _ => true,
     }
 }
 
@@ -350,12 +339,12 @@ where
                 }
             }
             BinaryOperatorKind::Equality(operator) => match expression.typ(left) {
-                Some(TCType::Int) => typed::equality(
+                Some(StreamType::Int) => typed::equality(
                     operator,
                     evaluate_int_typed::<AC>(expression.scope(left), context),
                     evaluate_int_typed::<AC>(expression.scope(right), context),
                 ),
-                Some(TCType::Float) => typed::equality(
+                Some(StreamType::Float) => typed::equality(
                     operator,
                     evaluate_float_typed::<AC>(expression.scope(left), context),
                     evaluate_float_typed::<AC>(expression.scope(right), context),
@@ -363,12 +352,12 @@ where
                 _ => evaluate_typed::<bool, AC>(expression, context),
             },
             BinaryOperatorKind::Ordering(operator) => match expression.typ(left) {
-                Some(TCType::Int) => typed::ordering(
+                Some(StreamType::Int) => typed::ordering(
                     operator,
                     evaluate_int_typed::<AC>(expression.scope(left), context),
                     evaluate_int_typed::<AC>(expression.scope(right), context),
                 ),
-                Some(TCType::Float) => typed::ordering(
+                Some(StreamType::Float) => typed::ordering(
                     operator,
                     evaluate_float_typed::<AC>(expression.scope(left), context),
                     evaluate_float_typed::<AC>(expression.scope(right), context),
@@ -416,9 +405,9 @@ where
     AC: AsyncConfig<Val = Value>,
 {
     match expression.typ(expression.as_ref()) {
-        Some(TCType::Int) => evaluate_int::<AC>(expression, context),
-        Some(TCType::Bool) => evaluate_bool::<AC>(expression, context),
-        Some(TCType::Float) => evaluate_float::<AC>(expression, context),
+        Some(StreamType::Int) => evaluate_int::<AC>(expression, context),
+        Some(StreamType::Bool) => evaluate_bool::<AC>(expression, context),
+        Some(StreamType::Float) => evaluate_float::<AC>(expression, context),
         _ => evaluate_scope::<AC>(expression, context),
     }
 }
@@ -473,8 +462,8 @@ mod tests {
     use crate::async_test;
     use crate::core::StreamTypeAscription;
     use crate::dsrv_fixtures::TestConfig;
+    use crate::lang::dsrv::ast::Expr;
     use crate::lang::dsrv::parser::parse_expr;
-    use crate::lang::dsrv::{TypeCheckOptions, ast::Expr};
     use crate::runtime::asynchronous::Context;
     use crate::runtime::builder::ValueConfig;
     use crate::semantics::StreamContext;
@@ -518,7 +507,7 @@ mod tests {
 
     /// Lexical frames and subtrees keep the prepared site of a `dynamic`
     /// inside a lambda body after the specification is gone, with its types
-    /// for checked evaluation and without them for untyped evaluation.
+    /// for source admission in both checked and unspecialized evaluation.
     #[test]
     fn lexical_frames_keep_the_prepared_site_with_or_without_types() {
         use ExprView::*;
@@ -528,9 +517,9 @@ mod tests {
         let expr = crate::dsrv_fixtures::elaborated(source)
             .var_expr(&"result".into())
             .unwrap();
-        for (expression, typed) in [
-            (ScopedExpr::checked(expr.clone()), true),
-            (ScopedExpr::untyped(expr.untyped()), false),
+        for expression in [
+            ScopedExpr::checked(expr.clone()),
+            ScopedExpr::untyped(expr.untyped()),
         ] {
             let framed = {
                 let Apply(function, mut args) = expression.as_ref().view() else {
@@ -549,7 +538,7 @@ mod tests {
             drop(expression);
             assert!(matches!(framed.as_ref().view(), Dynamic(..)));
             let site = framed.runtime_expression(framed.as_ref());
-            assert_eq!(site.typing().is_some(), typed);
+            assert!(site.typing().is_some());
             assert!(site.parse_and_check("1").is_ok());
         }
     }
@@ -558,10 +547,7 @@ mod tests {
     async fn checked_float_arithmetic_and_comparison_are_specialized(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let checked = crate::dsrv_fixtures::checked_with(
-            "out result: Bool\nresult = (1.5 + 2.0) < 4.0",
-            TypeCheckOptions::STRICT,
-        );
+        let checked = crate::dsrv_fixtures::checked("out result: Bool\nresult = (1.5 + 2.0) < 4.0");
         let expression = checked.var_expr(&"result".into()).unwrap();
         let context = Context::<ValueConfig>::new(executor, Vec::new(), Vec::new(), 0);
 
@@ -600,9 +586,8 @@ mod tests {
     async fn checked_float_default_repeats_known_values_across_no_val(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let checked = crate::dsrv_fixtures::checked_with(
+        let checked = crate::dsrv_fixtures::checked(
             "in x: Float\nout result: Float\nresult = default(x, 2.0)",
-            TypeCheckOptions::STRICT,
         );
         let expression = checked.var_expr(&"result".into()).unwrap();
         let input = Box::pin(futures::stream::iter([Value::Float(1.0), Value::NoVal]));
@@ -780,6 +765,32 @@ mod tests {
     fn to_stream(expr: Expr, ctx: &Context<TestConfig>) -> LocalStream<Value> {
         evaluate::<TestConfig>(expr, ctx)
     }
+    fn to_prepared_stream(
+        expr: Expr,
+        inputs: &[(&str, crate::core::StreamType)],
+        expected: crate::core::StreamType,
+        ctx: &Context<TestConfig>,
+    ) -> LocalStream<Value> {
+        use crate::dsrv_fixtures::WithoutWarnings;
+        let result = VarName::new("result");
+        let mut annotations = inputs
+            .iter()
+            .map(|(name, ty)| (VarName::new(*name), ty.clone()))
+            .collect::<BTreeMap<_, _>>();
+        annotations.insert(result.clone(), expected);
+        let prepared = crate::DsrvSpecification::new(
+            inputs.iter().map(|(name, _)| VarName::new(*name)).collect(),
+            std::collections::BTreeSet::from([result.clone()]),
+            BTreeMap::from([(result.clone(), expr)]),
+            annotations,
+            Vec::new(),
+        )
+        .check_and_elaborate()
+        .without_warnings()
+        .unwrap();
+        evaluate_ignoring_types::<TestConfig>(prepared.var_expr(&result).unwrap().untyped(), ctx)
+    }
+
     // ============================================================================
     // DEFER TESTS
     // ============================================================================
@@ -795,7 +806,12 @@ mod tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = Context::<TestConfig>::new(executor.clone(), vec!["x".into()], vec![x], 10);
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[("x", crate::core::StreamType::Int)],
+            crate::core::StreamType::Int,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -814,7 +830,12 @@ mod tests {
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::<TestConfig>::new(executor.clone(), vec!["x".into()], vec![x], 10);
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[("x", crate::core::StreamType::Int)],
+            crate::core::StreamType::Int,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -839,7 +860,15 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("x", crate::core::StreamType::Bool),
+                ("y", crate::core::StreamType::Bool),
+            ],
+            crate::core::StreamType::Bool,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -866,7 +895,15 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("e", crate::core::StreamType::Str),
+                ("x", crate::core::StreamType::Int),
+            ],
+            crate::core::StreamType::Int,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -885,7 +922,12 @@ mod tests {
         let x = Box::pin(stream::iter(vec![Value::Float(1.0), Value::Float(2.0)]));
         let mut ctx = Context::<TestConfig>::new(executor.clone(), vec!["x".into()], vec![x], 10);
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[("x", crate::core::StreamType::Float)],
+            crate::core::StreamType::Float,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -916,7 +958,15 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("x", crate::core::StreamType::Str),
+                ("y", crate::core::StreamType::Str),
+            ],
+            crate::core::StreamType::Str,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -950,7 +1000,15 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("e", crate::core::StreamType::Str),
+                ("x", crate::core::StreamType::Int),
+            ],
+            crate::core::StreamType::Int,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -977,7 +1035,15 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("e", crate::core::StreamType::Str),
+                ("x", crate::core::StreamType::Int),
+            ],
+            crate::core::StreamType::Int,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -1004,7 +1070,15 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("e", crate::core::StreamType::Str),
+                ("x", crate::core::StreamType::Int),
+            ],
+            crate::core::StreamType::Int,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -1032,7 +1106,15 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("e", crate::core::StreamType::Str),
+                ("x", crate::core::StreamType::Int),
+            ],
+            crate::core::StreamType::Int,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -1060,7 +1142,16 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("e", crate::core::StreamType::Str),
+                ("x", crate::core::StreamType::Bool),
+                ("y", crate::core::StreamType::Bool),
+            ],
+            crate::core::StreamType::Bool,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -1087,7 +1178,15 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("e", crate::core::StreamType::Str),
+                ("x", crate::core::StreamType::Float),
+            ],
+            crate::core::StreamType::Float,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 
@@ -1121,7 +1220,16 @@ mod tests {
             10,
         );
 
-        let res_stream = to_stream(expr, &ctx);
+        let res_stream = to_prepared_stream(
+            expr,
+            &[
+                ("e", crate::core::StreamType::Str),
+                ("x", crate::core::StreamType::Str),
+                ("y", crate::core::StreamType::Str),
+            ],
+            crate::core::StreamType::Str,
+            &ctx,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
 

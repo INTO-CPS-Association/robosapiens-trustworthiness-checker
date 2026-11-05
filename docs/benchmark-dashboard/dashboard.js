@@ -32,7 +32,7 @@ function sustainedMonitorCard([title, fixture]) {
             "Sustained execution over 100,000 timed events after 10,000 untimed setup events. Value-interface routes include Value-row dispatch and conversion; direct routes use the typed monitor interface. The warmed route is verified native before timing.",
         series: [
             { label: "Untyped value interface (historical)", name: `${prefix}/untyped_value` },
-            { label: "Gradually checked value interface", name: `${prefix}/gradually_checked_value` },
+            { label: "Unspecialized value interface", name: `${prefix}/unspecialized_value` },
             {
                 label: "Checked canonical value interface",
                 name: `${prefix}/checked_canonical_value`,
@@ -461,6 +461,12 @@ const BENCHMARK_ALIASES = {
     "compilation_phases/parse_and_validate_specification/1024": [
         "compilation_phases/lalr_parse/1024",
     ],
+    ...Object.fromEntries(
+        SUSTAINED_FIXTURES.map(([_label, fixture]) => [
+            `jit/sustained/${fixture}/unspecialized_value`,
+            [`jit/sustained/${fixture}/gradually_checked_value`],
+        ]),
+    ),
     ...Object.fromEntries(
         SUSTAINED_FIXTURES.map(([_label, fixture]) => [
             `jit/sustained/${fixture}/native_value_eager`,

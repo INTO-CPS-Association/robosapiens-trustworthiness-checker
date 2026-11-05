@@ -1,16 +1,16 @@
 //! Every specification shipped with the repository parses, expands, passes
-//! gradual type checking and elaborates.
+//! concrete type checking and elaborates.
 //!
 //! Every runtime checks and elaborates a specification before running it,
-//! gradually for `untimed` semantics, so a shipped specification that does
+//! under their declared concrete types, so a shipped specification that does
 //! not check is one no runtime accepts. Fragments that a harness assembles
 //! into specifications are named `.dsrv.in` and are not part of the corpus.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use trustworthiness_checker::lang::dsrv::Dialect;
 use trustworthiness_checker::lang::dsrv::parser::parse_str;
-use trustworthiness_checker::lang::dsrv::{Dialect, TypeCheckOptions};
 
 fn specifications_under(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -41,9 +41,7 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
         paths.len()
     );
 
-    // Two shipped files are not specifications this entry point accepts:
-    // one carries distribution constraints, parsed elsewhere, and one is a
-    // fixture whose literal is deliberately invalid.
+    // The constraints fragment is not a specification; the literal fixture is deliberately invalid.
     const NOT_ACCEPTED: [&str; 2] = [
         "examples/simple_add_distributable_dist_constraints.dsrv",
         "tests/fixtures/dsrv_syntax_revision_invalid_literal.dsrv",
@@ -81,14 +79,10 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
             {
                 unexpected.push(format!("{name} resolves to {language}"));
             }
-            let checks = specification
-                .clone()
-                .check_and_elaborate(TypeCheckOptions::GRADUAL)
-                .result()
-                .is_ok();
+            let checks = specification.clone().check_and_elaborate().result().is_ok();
             match (checks, ILL_TYPED.contains(&name.as_str())) {
                 (true, false) | (false, true) => {}
-                (false, false) => unexpected.push(format!("{name} fails gradual checking")),
+                (false, false) => unexpected.push(format!("{name} fails concrete checking")),
                 (true, true) => unexpected.push(format!("{name} now checks; update the list")),
             }
         }

@@ -688,9 +688,6 @@ pub enum StreamType {
     Expr(Box<StreamType>),
     Struct(EcoVec<(EcoString, StreamType)>, bool), // ordered typed fields, true allows extra fields
     Function(EcoVec<StreamType>, Box<StreamType>),
-    /// Gradual/dynamic stream type. Values are represented as `Value` and checked at runtime when
-    /// cast to a stricter type.
-    Any,
     Union(ClosedUnion<StreamType>),
 }
 
@@ -736,7 +733,6 @@ impl Display for StreamType {
                     .join(", ");
                 write!(f, "({} -> {})", args, ret)
             }
-            StreamType::Any => write!(f, "Any"),
             StreamType::Union(schema) => write!(f, "{schema}"),
         }
     }

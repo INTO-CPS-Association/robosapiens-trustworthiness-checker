@@ -142,8 +142,8 @@ fn assert_all_node_values(evaluator: &Evaluator, expected: Value) {
 
 #[test]
 fn destructive_exact_transfer_moves_state_without_cloning_and_clears_scratch() {
-    let source_program = compile_program("in x\nout z\nz = x + 1");
-    let target_program = compile_program("in x\nout z\nz = x + 1");
+    let source_program = compile_program("in x: Int\nout z\nz = x + 1");
+    let target_program = compile_program("in x: Int\nout z\nz = x + 1");
     let mapping = ReconfigurationMapping::between(&source_program, &target_program);
     let mut source = standalone_execution(&source_program);
     let mut target = standalone_execution(&target_program);
@@ -170,8 +170,8 @@ fn destructive_exact_transfer_moves_state_without_cloning_and_clears_scratch() {
 
 #[test]
 fn destructive_changed_transfer_resets_without_cloning() {
-    let source_program = compile_program("in x\nout z\nz = default(x[1], 0) + 1");
-    let target_program = compile_program("in x\nout z\nz = default(x[1], 0) + 2");
+    let source_program = compile_program("in x: Int\nout z\nz = default(x[1], 0) + 1");
+    let target_program = compile_program("in x: Int\nout z\nz = default(x[1], 0) + 2");
     let mapping = ReconfigurationMapping::between(&source_program, &target_program);
     assert!(matches!(
         mapping.stream(StreamId::new(0)),
@@ -202,14 +202,14 @@ fn destructive_changed_transfer_resets_without_cloning() {
 
 #[test]
 fn matching_validation_allows_changed_and_new_streams_to_initialize() {
-    let source_program = compile_program("in x\nout z\nz = x + 1");
-    let changed_target = compile_program("in x\nout z\nz = x + 2");
+    let source_program = compile_program("in x: Int\nout z\nz = x + 1");
+    let changed_target = compile_program("in x: Int\nout z\nz = x + 2");
     let changed_mapping = ReconfigurationMapping::between(&source_program, &changed_target);
     let source = standalone_execution(&source_program);
     let changed_execution = standalone_execution(&changed_target);
     assert!(changed_execution.validate_context_transfer(&source, &changed_mapping));
 
-    let added_target = compile_program("in x\nout z\nout added\nz = x + 1\nadded = x + 2");
+    let added_target = compile_program("in x: Int\nout z\nout added\nz = x + 1\nadded = x + 2");
     let added_mapping = ReconfigurationMapping::between(&source_program, &added_target);
     let added_execution = standalone_execution(&added_target);
     assert!(added_execution.validate_context_transfer(&source, &added_mapping));

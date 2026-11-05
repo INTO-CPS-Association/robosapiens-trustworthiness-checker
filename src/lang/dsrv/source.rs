@@ -92,7 +92,6 @@ impl TypeName {
                 | "Str"
                 | "Bool"
                 | "Unit"
-                | "Any"
                 | "List"
                 | "Tuple"
                 | "Map"
@@ -273,8 +272,7 @@ fn clear_type_spans(ty: &mut SourceType) {
         | SourceTypeKind::Float
         | SourceTypeKind::Str
         | SourceTypeKind::Bool
-        | SourceTypeKind::Unit
-        | SourceTypeKind::Any => {}
+        | SourceTypeKind::Unit => {}
     }
 }
 
@@ -503,7 +501,6 @@ pub(crate) enum SourceTypeKind {
     Str,
     Bool,
     Unit,
-    Any,
     List(Box<SourceType>),
     Tuple(EcoVec<SourceType>),
     Map(Box<SourceType>),
@@ -539,7 +536,6 @@ impl fmt::Display for SourceType {
             SourceTypeKind::Str => write!(f, "Str"),
             SourceTypeKind::Bool => write!(f, "Bool"),
             SourceTypeKind::Unit => write!(f, "Unit"),
-            SourceTypeKind::Any => write!(f, "Any"),
             SourceTypeKind::List(ty) => write!(f, "List<{ty}>"),
             SourceTypeKind::Map(ty) => write!(f, "Map<{ty}>"),
             SourceTypeKind::Expr(ty) => write!(f, "Expr<{ty}>"),
@@ -605,7 +601,6 @@ impl From<StreamType> for SourceType {
             StreamType::Str => SourceTypeKind::Str,
             StreamType::Bool => SourceTypeKind::Bool,
             StreamType::Unit => SourceTypeKind::Unit,
-            StreamType::Any => SourceTypeKind::Any,
             StreamType::List(ty) => SourceTypeKind::List(Box::new((*ty).into())),
             StreamType::Map(ty) => SourceTypeKind::Map(Box::new((*ty).into())),
             StreamType::Expr(ty) => SourceTypeKind::Expr(Box::new((*ty).into())),
@@ -885,148 +880,6 @@ pub(crate) fn substitute_source(
     }
 }
 
-/// Match a generic source pattern against one concrete structural type.
-pub(crate) fn match_source_type(
-    context: &SourceContext,
-    pattern: &SourceType,
-    actual: &StreamType,
-    parameters: &BTreeSet<TypeName>,
-    bound: &mut BTreeMap<TypeName, StreamType>,
-) -> bool {
-    fn matches(
-        context: &SourceContext,
-        pattern: &SourceType,
-        actual: &StreamType,
-        parameters: &BTreeSet<TypeName>,
-        bound: &mut BTreeMap<TypeName, StreamType>,
-        active: &mut Vec<TypePath>,
-    ) -> bool {
-        use SourceTypeKind::*;
-        if let Named(path, arguments) = &pattern.kind {
-            if arguments.is_empty() && !path.is_qualified() {
-                if let Some(parameter) = parameters.get(path.name()) {
-                    return match bound.get(parameter) {
-                        Some(previous) => {
-                            previous == actual
-                                || previous == &StreamType::Any
-                                || actual == &StreamType::Any
-                        }
-                        None => {
-                            bound.insert(parameter.clone(), actual.clone());
-                            true
-                        }
-                    };
-                }
-            }
-            let alias = context.generic().get(path).or_else(|| {
-                (!path.is_qualified()).then(|| {
-                    context
-                        .generic()
-                        .iter()
-                        .find(|(name, _)| name.name() == path.name())
-                        .map(|(_, alias)| alias)
-                })?
-            });
-            if let Some(alias) = alias {
-                if alias.parameters.len() != arguments.len() || active.contains(path) {
-                    return false;
-                }
-                let substitutions = alias.parameters.iter().zip(arguments).collect();
-                let expanded = substitute_source(&alias.ty, &substitutions);
-                active.push(path.clone());
-                let result = matches(context, &expanded, actual, parameters, bound, active);
-                active.pop();
-                return result;
-            }
-            return arguments.is_empty()
-                && context.get(path).is_some_and(|resolved| resolved == actual);
-        }
-        // `Any` remains gradually consistent with every structural shape.
-        // Bare parameters are handled above so an `Any` argument still binds
-        // the parameter and can ground a result-only inference.
-        if actual == &StreamType::Any {
-            return true;
-        }
-        match (&pattern.kind, actual) {
-            (Any, _) => true,
-            (Int, StreamType::Int)
-            | (Float, StreamType::Float)
-            | (Str, StreamType::Str)
-            | (Bool, StreamType::Bool)
-            | (Unit, StreamType::Unit) => true,
-            (List(pattern), StreamType::List(actual))
-            | (Map(pattern), StreamType::Map(actual))
-            | (Expr(pattern), StreamType::Expr(actual)) => {
-                matches(context, pattern, actual, parameters, bound, active)
-            }
-            (Tuple(patterns), StreamType::Tuple(actuals)) => {
-                patterns.len() == actuals.len()
-                    && patterns.iter().zip(actuals).all(|(pattern, actual)| {
-                        matches(context, pattern, actual, parameters, bound, active)
-                    })
-            }
-            (Struct(patterns, pattern_open), StreamType::Struct(actuals, actual_open)) => {
-                let fields_match = patterns.iter().all(|(name, pattern)| {
-                    actuals
-                        .iter()
-                        .find(|(actual, _)| actual == name)
-                        .is_some_and(|(_, actual)| {
-                            matches(context, pattern, actual, parameters, bound, active)
-                        })
-                });
-                let pattern_fields_present = patterns
-                    .iter()
-                    .all(|(name, _)| actuals.iter().any(|(actual, _)| actual == name));
-                let actual_fields_present = actuals
-                    .iter()
-                    .all(|(name, _)| patterns.iter().any(|(pattern, _)| pattern == name));
-                fields_match
-                    && ((*pattern_open && pattern_fields_present)
-                        || (*actual_open && actual_fields_present)
-                        || (!*pattern_open && !*actual_open && patterns.len() == actuals.len()))
-            }
-            (
-                Function(pattern_args, pattern_result),
-                StreamType::Function(actual_args, actual_result),
-            ) => {
-                pattern_args.len() == actual_args.len()
-                    && pattern_args
-                        .iter()
-                        .zip(actual_args)
-                        .all(|(pattern, actual)| {
-                            matches(context, pattern, actual, parameters, bound, active)
-                        })
-                    && matches(
-                        context,
-                        pattern_result,
-                        actual_result,
-                        parameters,
-                        bound,
-                        active,
-                    )
-            }
-            (Union(patterns), StreamType::Union(actual)) => {
-                patterns.len() == actual.alternatives().len()
-                    && patterns.iter().all(|pattern| {
-                        actual
-                            .alternatives()
-                            .iter()
-                            .find(|actual| pattern.tag == *actual.tag())
-                            .is_some_and(|actual| match (&pattern.payload, actual.payload()) {
-                                (None, UnionPayload::Nullary) => true,
-                                (Some(pattern), UnionPayload::Of(actual)) => {
-                                    matches(context, pattern, actual, parameters, bound, active)
-                                }
-                                _ => false,
-                            })
-                    })
-            }
-            _ => false,
-        }
-    }
-    matches(context, pattern, actual, parameters, bound, &mut Vec::new())
-}
-
 fn substituted(source: &SourceType, bound: &BTreeMap<&TypeName, &StreamType>) -> SourceType {
     let kind = match &source.kind {
         // A parameter stands for the argument itself, so a parameter applied
@@ -1090,7 +943,6 @@ fn resolve_type(
         SourceTypeKind::Str => StreamType::Str,
         SourceTypeKind::Bool => StreamType::Bool,
         SourceTypeKind::Unit => StreamType::Unit,
-        SourceTypeKind::Any => StreamType::Any,
         SourceTypeKind::List(ty) => StreamType::List(Box::new(resolve_type(ty, lookup)?)),
         SourceTypeKind::Map(ty) => StreamType::Map(Box::new(resolve_type(ty, lookup)?)),
         SourceTypeKind::Expr(ty) => StreamType::Expr(Box::new(resolve_type(ty, lookup)?)),

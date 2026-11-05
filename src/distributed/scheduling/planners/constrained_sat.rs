@@ -277,9 +277,9 @@ mod tests {
 
     fn aux_spec() -> crate::ElaboratedDsrvSpecification {
         let src = r#"language distributed
-in c1
-in c2
-in c3
+in c1: Bool
+in c2: Bool
+in c3: Bool
 out s1
 out s2
 out s3

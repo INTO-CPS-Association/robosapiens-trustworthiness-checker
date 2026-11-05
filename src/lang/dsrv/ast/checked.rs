@@ -5,23 +5,23 @@ use contiguous_tree::{ContextCursor, TreeCursorExt};
 #[cfg(test)]
 use super::AstWeak;
 use super::{AstShared, Expr, ExprArena, ExprKind, ExprRef, ExprView};
+use crate::core::StreamType;
 use crate::lang::dsrv::runtime_expression::{
     RuntimeExpressionSite, RuntimeExpressionSites, RuntimeExpressionTyping, UntypedExpr,
     prepare_site_table,
 };
 use crate::lang::dsrv::source_map::SourceArchive;
-use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
+use crate::lang::dsrv::type_checker::StreamTypes;
 
-pub(crate) type ExprTypes = contiguous_tree::NodeAnnotations<ExprArena, TCType>;
-pub(crate) type ExprTypesBuilder = contiguous_tree::NodeAnnotationsBuilder<ExprArena, TCType>;
+pub(crate) type ExprTypes = contiguous_tree::NodeAnnotations<ExprArena, StreamType>;
 
 /// Immutable checked state shared by every checked expression handle: each
 /// node's type, the stream environment, and, once an executable artefact has
 /// been prepared, the sites of its runtime expressions.
 #[derive(Clone, Debug)]
 pub(crate) struct CheckedExpressionContext {
-    expr_types: ExprTypes,
-    environment: AstShared<StreamTypeEnvironment>,
+    expr_types: AstShared<ExprTypes>,
+    environment: AstShared<StreamTypes>,
     runtime_expressions: PreparationState,
 }
 
@@ -35,25 +35,22 @@ enum PreparationState {
 }
 
 impl CheckedExpressionContext {
-    pub(crate) fn new(
-        expr_types: ExprTypes,
-        environment: AstShared<StreamTypeEnvironment>,
-    ) -> Self {
+    pub(crate) fn new(expr_types: ExprTypes, environment: AstShared<StreamTypes>) -> Self {
         Self {
-            expr_types,
+            expr_types: AstShared::new(expr_types),
             environment,
             runtime_expressions: PreparationState::Unprepared,
         }
     }
 
-    pub(crate) fn type_of(&self, expr: ExprRef<'_>) -> &TCType {
+    pub(crate) fn type_of(&self, expr: ExprRef<'_>) -> &StreamType {
         self.expr_types
             .get(expr)
             .expect("checked expression belongs to the typed tree or forest")
     }
 
     #[cfg(test)]
-    pub(crate) fn shared_type_environment(&self) -> &AstShared<StreamTypeEnvironment> {
+    pub(crate) fn shared_type_environment(&self) -> &AstShared<StreamTypes> {
         &self.environment
     }
 
@@ -74,7 +71,7 @@ impl CheckedExpressionContext {
             })
         });
         Self {
-            expr_types: self.expr_types.clone(),
+            expr_types: AstShared::clone(&self.expr_types),
             environment: AstShared::clone(&self.environment),
             runtime_expressions: PreparationState::Ready(AstShared::new(sites)),
         }
@@ -131,7 +128,7 @@ impl CheckedExpr {
     pub(crate) fn new(
         expr: Expr,
         expr_types: ExprTypes,
-        environment: AstShared<StreamTypeEnvironment>,
+        environment: AstShared<StreamTypes>,
     ) -> Self {
         let checked = AstShared::new(CheckedExpressionContext::new(expr_types, environment));
         Self::from_checked_types(expr, checked)
@@ -148,12 +145,12 @@ impl CheckedExpr {
         &self.expr
     }
 
-    pub fn typ(&self) -> &TCType {
+    pub fn typ(&self) -> &StreamType {
         self.checked.type_of(self.expr.as_ref())
     }
 
     /// The stream environment this expression was checked in.
-    pub(crate) fn environment(&self) -> &AstShared<StreamTypeEnvironment> {
+    pub(crate) fn environment(&self) -> &AstShared<StreamTypes> {
         &self.checked.environment
     }
 
@@ -259,12 +256,12 @@ impl<'arena> CheckedExprRef<'arena> {
         self.expr().kind()
     }
 
-    pub fn typ(self) -> &'arena TCType {
+    pub fn typ(self) -> &'arena StreamType {
         self.cursor.context().type_of(self.expr())
     }
 
     #[cfg(test)]
-    pub(crate) fn shared_type_environment(self) -> &'arena AstShared<StreamTypeEnvironment> {
+    pub(crate) fn shared_type_environment(self) -> &'arena AstShared<StreamTypes> {
         self.cursor.context().shared_type_environment()
     }
 

@@ -10,7 +10,6 @@ use crate::VarName;
 use crate::core::{StreamType, UnionPayload};
 use crate::dsrv_fixtures::WithoutWarnings;
 use crate::lang::dsrv::LanguageError;
-use crate::lang::dsrv::TypeCheckOptions;
 use crate::lang::dsrv::ast::DsrvSpecification;
 use crate::lang::dsrv::parser::{DsrvParseError, parse_str};
 use crate::lang::dsrv::source::SourceResolveError;
@@ -54,18 +53,9 @@ fn generic_def_checks(source: &str) -> bool {
         "use experimental::{{functions, generics, tagged_unions}}\n{source}"
     ))
     .expect("generic def parses")
-    .check(TypeCheckOptions::STRICT)
+    .check()
     .without_warnings()
-    .is_ok()
-}
-
-fn generic_def_checks_with(source: &str, options: TypeCheckOptions) -> bool {
-    parse_str(&format!(
-        "use experimental::{{functions, generics, tagged_unions}}\n{source}"
-    ))
-    .expect("generic def parses")
-    .check(options)
-    .without_warnings()
+    .inspect_err(|errors| eprintln!("generic source: {source}\n{errors:?}"))
     .is_ok()
 }
 
@@ -93,40 +83,13 @@ fn generic_function_signature_matches_nested_aliases() {
 }
 
 #[test]
-fn generic_structural_matching_keeps_any_gradual_consistency() {
-    let source = "def first<T>(x: List<T>) -> T = 1\nin a: Any\nout x: Int = first(a)\n";
-    assert!(generic_def_checks_with(source, TypeCheckOptions::STRICT));
-    assert!(generic_def_checks_with(source, TypeCheckOptions::GRADUAL));
-    assert!(!generic_def_checks_with(
-        "def first<T>(x: List<T>) -> T = 1\nin a: Str\nout x: Int = first(a)\n",
-        TypeCheckOptions::STRICT,
-    ));
-}
-
-#[test]
-fn bare_generic_parameters_bind_any_in_strict_and_gradual_checks() {
-    for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
-        assert!(generic_def_checks_with(
-            "def id<T>(x: T) -> T = x\nin a: Any\nout x: Any = id(a)\n",
-            options,
-        ));
-        assert!(generic_def_checks_with(
-            "def same<T>(x: T, y: T) -> T = x\nin a: Any\nin b: Any\nout x: Any = same(a, b)\n",
-            options,
-        ));
-        assert!(generic_def_checks_with(
-            "def make<T>() -> T = 1\nout x: Any = make()\n",
-            options,
-        ));
-    }
-}
-
-#[test]
 fn generic_struct_matching_uses_open_structural_compatibility() {
     assert!(generic_def_checks(
         "def get<T>(x: Struct<value: T, ...>) -> T = 1\nin a: Struct<value: Int, extra: Str>\nout x: Int = get(a)\n"
     ));
-    assert!(generic_def_checks(
+    // A closed parameter has no other fields, which an open argument does not
+    // say of its value.
+    assert!(!generic_def_checks(
         "def get<T>(x: Struct<value: T>) -> T = 1\nin a: Struct<value: Int, ...>\nout x: Int = get(a)\n"
     ));
     assert!(!generic_def_checks(
@@ -139,24 +102,6 @@ fn expected_result_anchors_generic_parameter_before_checking_empty_list() {
     assert!(generic_def_checks(
         "def id<T>(x: T) -> T = x\nout x: List<Int> = id([])\n"
     ));
-}
-
-#[test]
-fn any_grounds_bare_generic_parameters_in_strict_and_gradual_modes() {
-    for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
-        assert!(generic_def_checks_with(
-            "def id<T>(x: T) -> T = x\nin a: Any\nout x: Any = id(a)\n",
-            options,
-        ));
-        assert!(generic_def_checks_with(
-            "def same<T>(x: T, y: T) -> T = x\nin a: Any\nin b: Any\nout x: Any = same(a, b)\n",
-            options,
-        ));
-        assert!(generic_def_checks_with(
-            "def make<T>() -> T = 1\nout x: Any = make()\n",
-            options,
-        ));
-    }
 }
 
 #[test]
@@ -321,6 +266,31 @@ fn a_generic_alias_that_expands_to_itself_is_a_cycle_not_a_hang() {
 }
 
 #[test]
+fn generic_result_matching_refuses_recursive_aliases_with_growing_arguments() {
+    for aliases in [
+        "type Loop<A> = Loop<List<A>>",
+        "type Loop<A> = Next<List<A>>\ntype Next<B> = Loop<B>",
+        "type Identity<B> = B\ntype Loop<A> = Identity<Loop<List<A>>>",
+    ] {
+        let source = format!(
+            "use experimental::{{functions, generics}}\n{aliases}\ndef f<T>(x: T) -> Loop<T> = x\nout y: Int = f(1)\n"
+        );
+        let errors = parse_str(&source)
+            .expect("generic signature defers concrete alias resolution")
+            .check()
+            .discard_warnings()
+            .expect_err("recursive alias must be refused");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.to_string().contains("cyclic definition")),
+            "{errors:?}"
+        );
+        assert!(errors[0].location().primary().is_some(), "{errors:?}");
+    }
+}
+
+#[test]
 fn an_unused_generic_alias_does_not_have_to_resolve() {
     // It has no type until it is applied, so an unknown name in its body is
     // only an error at a use site.
@@ -396,21 +366,6 @@ fn applying_a_name_needs_the_experiment() {
 }
 
 #[test]
-fn nested_generic_calls_take_context_from_sibling_arguments_in_either_order() {
-    for call in ["same(a, make())", "same(make(), a)"] {
-        assert!(generic_def_checks(&format!(
-            "def make<T>() -> List<T> = []\ndef same<T>(a: List<T>, b: List<T>) -> Bool = true\nin a: List<Int>\nout ok: Bool = {call}\n"
-        )));
-    }
-    assert!(generic_def_checks(
-        "def make<T>() -> List<T> = []\ndef id<T>(x: T) -> T = x\nout x: List<Int> = id(make())\n"
-    ));
-    assert!(!generic_def_checks(
-        "def make<T>() -> List<T> = []\ndef same<T>(a: List<T>, b: List<T>) -> Bool = true\nout ok: Bool = same(make(), make())\n"
-    ));
-}
-
-#[test]
 fn nested_generic_identity_calls_do_not_repeat_grounded_subtrees() {
     let nested = (0..24).fold("1".to_owned(), |inner, _| format!("id({inner})"));
     for output in [
@@ -423,14 +378,82 @@ fn nested_generic_identity_calls_do_not_repeat_grounded_subtrees() {
     }
 }
 
+/// The first concrete argument determines the generic parameter.
 #[test]
-fn comparison_operands_supply_context_to_nested_generic_calls_in_either_order() {
-    for expression in ["value == make()", "make() == value", "make() != value"] {
+fn a_list_of_structs_at_a_type_parameter_takes_the_first_argument_s_type() {
+    let call = |output: &str, call: &str| {
+        format!(
+            "def two<T>(p: List<T>, q: List<T>) -> List<T> = p\n\
+             in s: Struct<a: Int, b: Int>\n\
+             in t: Struct<a: Int, ...>\n\
+             out x{output} = {call}\n"
+        )
+    };
+    assert!(!generic_def_checks(&call("", "two([s], [t])")));
+    assert!(generic_def_checks(&call(
+        ": List<Struct<a: Int, ...>>",
+        "two([t], [s])"
+    )));
+}
+
+#[test]
+fn generic_arguments_are_grounded_in_source_order() {
+    let header = "def make<T>() -> List<T> = []\ndef same<T>(a: List<T>, b: List<T>) -> Bool = true\nin a: List<Int>\n";
+    assert!(generic_def_checks(&format!(
+        "{header}out ok: Bool = same(a, make())"
+    )));
+    for call in ["same(make(), a)", "same(make(), make())"] {
+        assert!(
+            !generic_def_checks(&format!("{header}out ok: Bool = {call}")),
+            "{call}"
+        );
+    }
+    assert!(generic_def_checks(&format!(
+        "{header}aux tmp: List<Int> = make()\nout ok = same(tmp, a)"
+    )));
+    assert!(generic_def_checks(
+        "def make<T>() -> List<T> = []\ndef id<T>(x:T)->T=x\nout x:List<Int> = id(make())"
+    ));
+    assert!(!generic_def_checks(
+        "def make<T>() -> List<T> = []\nout x = make()"
+    ));
+}
+
+#[test]
+fn comparisons_only_pass_already_known_operand_context() {
+    let header = "def make<T>() -> List<T> = []\nin value: List<Int>\n";
+    assert!(generic_def_checks(&format!(
+        "{header}out same:Bool = value == make()"
+    )));
+    for expression in ["make() == value", "make() != value", "make() == make()"] {
+        assert!(
+            !generic_def_checks(&format!("{header}out same:Bool = {expression}")),
+            "{expression}"
+        );
+    }
+}
+
+#[test]
+fn concrete_arguments_and_results_ground_generic_signatures() {
+    for typ in ["Int", "List<Int>", "Struct<a:Int,...>"] {
         assert!(generic_def_checks(&format!(
-            "def make<T>() -> List<T> = []\nin value: List<Int>\nout same: Bool = {expression}\n"
+            "def id<T>(x:T)->T=x\nin a:{typ}\nout x=id(a)"
         )));
     }
     assert!(!generic_def_checks(
-        "def make<T>() -> List<T> = []\nout same: Bool = make() == make()\n"
+        "def same<T>(a:T,b:T)->T=a\nin a:Int\nin b:Str\nout x=same(a,b)"
+    ));
+}
+
+#[test]
+fn known_generic_callback_parameters_allow_body_result_inference() {
+    assert!(generic_def_checks(
+        "def apply<T,U>(x:T,f:(T -> U))->U=f(x)\nout y=apply(1, \\x -> x+1)"
+    ));
+    assert!(!generic_def_checks(
+        "def apply<T,U>(f:(T -> U),x:T)->U=f(x)\nout y=apply(\\x -> x+1,1)"
+    ));
+    assert!(!generic_def_checks(
+        "def apply<T,U>(f:(T -> U),x:T)->U=f(x)\nout y:Int=apply(\\x -> 1,1)"
     ));
 }

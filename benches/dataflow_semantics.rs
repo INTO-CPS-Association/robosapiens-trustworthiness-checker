@@ -157,11 +157,6 @@ fn typed_recursive_spec() -> ElaboratedDsrvSpecification {
     trustworthiness_checker::dsrv_fixtures::elaborated(spec)
 }
 
-/// Check a specification gradually and elaborate it, as every runtime requires.
-fn elaborate_gradually(spec: &DsrvSpecification) -> ElaboratedDsrvSpecification {
-    trustworthiness_checker::dsrv_fixtures::elaborate_for(spec.clone(), Semantics::Untimed)
-}
-
 fn arithmetic_spec() -> DsrvSpecification {
     let spec = "in x\n\
                     in y\n\
@@ -342,7 +337,7 @@ fn recursive_function_input_columns(size: usize) -> Vec<Vec<Value>> {
 
 fn compare_dataflow_semantics(c: &mut Criterion) {
     let spec = recursive_spec();
-    let spec = elaborate_gradually(&spec);
+    let spec = trustworthiness_checker::dsrv_fixtures::elaborate(spec.clone());
     let typed_spec = typed_recursive_spec();
 
     let mut group = c.benchmark_group("dataflow_semantics_recursive");
@@ -417,7 +412,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
     group.finish();
 
     let spec = arithmetic_spec();
-    let spec = elaborate_gradually(&spec);
+    let spec = trustworthiness_checker::dsrv_fixtures::elaborate(spec.clone());
     let typed_spec = typed_arithmetic_spec();
     let mut group = c.benchmark_group("dataflow_semantics_arithmetic");
     group.sampling_mode(SamplingMode::Flat);
@@ -491,7 +486,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
     group.finish();
 
     let spec = stream_dependency_spec();
-    let spec = elaborate_gradually(&spec);
+    let spec = trustworthiness_checker::dsrv_fixtures::elaborate(spec.clone());
     let typed_spec = typed_stream_dependency_spec();
     let mut group = c.benchmark_group("dataflow_semantics_stream_dependency");
     group.sampling_mode(SamplingMode::Flat);
@@ -592,11 +587,16 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
     let typed_recursive_function_if_spec = typed_recursive_function_if_spec();
     let direct_function_if_spec = direct_function_if_spec();
     let typed_direct_function_if_spec = typed_direct_function_if_spec();
-    let elaborated_arithmetic_spec = elaborate_gradually(&arithmetic_spec);
-    let elaborated_if_arithmetic_spec = elaborate_gradually(&if_arithmetic_spec);
-    let elaborated_function_spec = elaborate_gradually(&function_spec);
-    let elaborated_direct_function_if_spec = elaborate_gradually(&direct_function_if_spec);
-    let elaborated_recursive_function_if_spec = elaborate_gradually(&recursive_function_if_spec);
+    let elaborated_arithmetic_spec =
+        trustworthiness_checker::dsrv_fixtures::elaborate(arithmetic_spec.clone());
+    let elaborated_if_arithmetic_spec =
+        trustworthiness_checker::dsrv_fixtures::elaborate(if_arithmetic_spec.clone());
+    let elaborated_function_spec =
+        trustworthiness_checker::dsrv_fixtures::elaborate(function_spec.clone());
+    let elaborated_direct_function_if_spec =
+        trustworthiness_checker::dsrv_fixtures::elaborate(direct_function_if_spec.clone());
+    let elaborated_recursive_function_if_spec =
+        trustworthiness_checker::dsrv_fixtures::elaborate(recursive_function_if_spec.clone());
     let mut group = c.benchmark_group("dataflow_semantics_function_evaluation");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);

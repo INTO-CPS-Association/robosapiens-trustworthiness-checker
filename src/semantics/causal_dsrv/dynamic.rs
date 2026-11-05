@@ -14,12 +14,11 @@ type Evaluator<AC, D> = fn(&UntypedExpr, &<AC as AsyncConfig>::Ctx) -> LocalStre
 type CheckedEvaluator<AC, D> =
     fn(&CheckedExpr, &<AC as AsyncConfig>::Ctx) -> LocalStream<CausalValue<D>>;
 
-/// How a runtime expression is accepted and evaluated. Monitors evaluated
-/// without types keep their parse-only policy: their runtime expressions are
-/// parsed at the occurrence's site but never checked.
+/// How checked runtime source is evaluated: with specialized types or through
+/// the reference evaluator. Both paths keep the occurrence's concrete site.
 #[derive(Clone)]
 enum RuntimeEvaluator<AC: AsyncConfig, D: CausalDomain> {
-    Unchecked(Evaluator<AC, D>),
+    Reference(Evaluator<AC, D>),
     Checked(CheckedEvaluator<AC, D>),
 }
 
@@ -80,7 +79,7 @@ where
         source,
         scope,
         site,
-        RuntimeEvaluator::<AC, D>::Unchecked(evaluator),
+        RuntimeEvaluator::<AC, D>::Reference(evaluator),
     )
 }
 
@@ -193,11 +192,11 @@ where
     AC::Ctx: StreamContext<AC = AC>,
 {
     match evaluator {
-        RuntimeEvaluator::Unchecked(evaluator) => {
+        RuntimeEvaluator::Reference(evaluator) => {
             let expr = site
-                .parse_unchecked_for(property, crate::core::RuntimeCapabilities::NONE, "causal")
+                .parse_and_check_for(property, crate::core::RuntimeCapabilities::NONE, "causal")
                 .unwrap_or_else(|error| panic!("invalid scalar dynamic DSRV expression: {error}"));
-            evaluator(&expr, ctx)
+            evaluator(&expr.untyped(), ctx)
         }
         RuntimeEvaluator::Checked(evaluator) => {
             let checked = site
@@ -209,6 +208,7 @@ where
                     RuntimeExpressionError::TypeCheck { errors, .. } => {
                         panic!("Dynamic expression failed type checking: {errors:?}")
                     }
+                    RuntimeExpressionError::MissingTyping { .. } => panic!("{error}"),
                     RuntimeExpressionError::Unsupported { .. } => {
                         panic!("Dynamic expression is unsupported: {error}")
                     }
@@ -236,7 +236,7 @@ where
         source,
         scope,
         site,
-        RuntimeEvaluator::<AC, D>::Unchecked(evaluator),
+        RuntimeEvaluator::<AC, D>::Reference(evaluator),
     )
 }
 

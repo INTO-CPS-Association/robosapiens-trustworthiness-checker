@@ -801,7 +801,7 @@ mod tests {
     use crate::runtime::builder::SemiSyncValueConfig;
     use crate::semantics::UntimedDsrvSemantics;
     use crate::stream_utils::{Fanout, FanoutSender};
-    use crate::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+    use crate::{ElaboratedDsrvSpecification, Value, VarName};
     use tc_testutils::streams::with_timeout;
 
     type TestRuntime = ReconfSemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics>;
@@ -810,7 +810,7 @@ mod tests {
     const FINITE_FIRST_OUTPUT_MODEL: &str = "in x: Int\nout z: Int\nz = 1";
 
     fn parse_spec(source: &str) -> anyhow::Result<ElaboratedDsrvSpecification> {
-        crate::dsrv_fixtures::replacement_preparation(TypeCheckOptions::GRADUAL)(source)
+        crate::dsrv_fixtures::replacement_preparation()(source)
     }
 
     fn channel_input() -> (

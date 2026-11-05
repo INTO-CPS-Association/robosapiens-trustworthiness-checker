@@ -104,14 +104,9 @@ pub const CLI_ARGUMENT_REQUIREMENTS: &[(&str, &str)] = &[
     ("scheduler_reconf_topic", "scheduler_ros_node_name"),
 ];
 
-const DSRV_TYPED_SEMANTICS: &[Semantics] =
-    &[Semantics::TypedUntimed, Semantics::GradualTypedUntimed];
-const DSRV_DISTRIBUTED_SEMANTICS: &[Semantics] = &[Semantics::GradualTypedUntimed];
-const DSRV_SEMI_SYNC_SEMANTICS: &[Semantics] = &[
-    Semantics::TypedUntimed,
-    Semantics::GradualTypedUntimed,
-    Semantics::Causal,
-];
+const DSRV_TYPED_SEMANTICS: &[Semantics] = &[Semantics::TypedUntimed];
+const DSRV_DISTRIBUTED_SEMANTICS: &[Semantics] = &[Semantics::TypedUntimed];
+const DSRV_SEMI_SYNC_SEMANTICS: &[Semantics] = &[Semantics::TypedUntimed, Semantics::Causal];
 
 fn supported_dsrv_semantics(runtime: RuntimeKind) -> &'static [Semantics] {
     match runtime {
@@ -388,7 +383,7 @@ pub struct Cli {
 
     #[arg(long, help = "Specification language to use", default_value_t = Language::DSRV)]
     pub language: Language,
-    #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::GradualTypedUntimed)]
+    #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::TypedUntimed)]
     pub semantics: Semantics,
     #[arg(long, help = "DSRV runtime system to use for execution", default_value_t = RuntimeKind::Dataflow)]
     pub runtime: RuntimeKind,
@@ -728,35 +723,25 @@ mod runtime_tests {
 
     #[test]
     fn every_dsrv_runtime_semantics_pair_matches_the_builder_matrix() {
-        const ALL_SEMANTICS: [Semantics; 6] = [
+        const ALL_SEMANTICS: [Semantics; 5] = [
             Semantics::TypedUntimed,
-            Semantics::GradualTypedUntimed,
             Semantics::DelayedQuantitative,
             Semantics::DelayedQualitative,
             Semantics::EagerQualitative,
             Semantics::RobustnessInterval,
         ];
         let cases = [
-            (RuntimeKind::Async, [true, true, false, false, false, false]),
-            (
-                RuntimeKind::Dataflow,
-                [true, true, false, false, false, false],
-            ),
-            (
-                RuntimeKind::Distributed,
-                [false, true, false, false, false, false],
-            ),
-            (
-                RuntimeKind::SemiSync,
-                [true, true, false, false, false, false],
-            ),
+            (RuntimeKind::Async, [true, false, false, false, false]),
+            (RuntimeKind::Dataflow, [true, false, false, false, false]),
+            (RuntimeKind::Distributed, [true, false, false, false, false]),
+            (RuntimeKind::SemiSync, [true, false, false, false, false]),
             (
                 RuntimeKind::ReconfSemiSync,
-                [true, true, false, false, false, false],
+                [true, false, false, false, false],
             ),
             (
                 RuntimeKind::ReconfDataflow,
-                [true, true, false, false, false, false],
+                [true, false, false, false, false],
             ),
         ];
 
@@ -823,9 +808,8 @@ mod runtime_tests {
 
     #[test]
     fn mstlo_keeps_non_causal_cli_semantics_available() {
-        const ALL_SEMANTICS: [Semantics; 6] = [
+        const ALL_SEMANTICS: [Semantics; 5] = [
             Semantics::TypedUntimed,
-            Semantics::GradualTypedUntimed,
             Semantics::DelayedQuantitative,
             Semantics::DelayedQualitative,
             Semantics::EagerQualitative,
@@ -882,7 +866,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn untimed_and_its_compatibility_alias_select_gradual_typing() {
+    fn untimed_and_its_compatibility_alias_select_the_same_semantics() {
         for language in ["dsrv", "core-dsrv", "distributed-dsrv", "mstlo"] {
             for name in ["untimed", "gradual-typed-untimed"] {
                 let cli = Cli::try_parse_from([
@@ -896,7 +880,7 @@ mod runtime_tests {
                     name,
                 ])
                 .unwrap();
-                assert_eq!(cli.semantics, Semantics::GradualTypedUntimed);
+                assert_eq!(cli.semantics, Semantics::TypedUntimed);
             }
         }
     }
@@ -907,7 +891,7 @@ mod runtime_tests {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("[default: untimed]"), "{help}");
         assert!(!help.contains("gradual-typed-untimed"), "{help}");
-        assert_eq!(Semantics::GradualTypedUntimed.to_string(), "untimed");
+        assert_eq!(Semantics::TypedUntimed.to_string(), "untimed");
     }
 
     #[test]

@@ -338,8 +338,7 @@ fn compile_dynamic_expression(
     environment: &Rc<EnvironmentLayout>,
 ) -> Result<CompiledReconfigurableExpression, DataflowEvaluationError> {
     // Source is checked on arrival whether or not this graph consults types:
-    // against the type and environment elaboration gave the occurrence, or,
-    // where it has none, against `Any` (see RuntimeExpressionSite). Checking
+    // against the concrete type and environment elaboration gave the occurrence. Checking
     // prepares the sites of any nested occurrences before the graph is built.
     let site = &spec.site;
     let checked = site
@@ -351,7 +350,8 @@ fn compile_dynamic_expression(
                     message: error.to_string(),
                 }
             }
-            RuntimeExpressionError::TypeCheck { .. } => {
+            RuntimeExpressionError::TypeCheck { .. }
+            | RuntimeExpressionError::MissingTyping { .. } => {
                 DataflowEvaluationError::ReconfigurableExpressionType {
                     expression: source_text.clone(),
                     message: error.to_string(),
@@ -411,6 +411,23 @@ fn compile_dynamic_expression(
 
 #[cfg(test)]
 mod tests {
+    fn int_source_site(names: &[&str]) -> RuntimeExpressionSite {
+        use crate::core::StreamType;
+        use crate::lang::dsrv::runtime_expression::RuntimeExpressionTyping;
+        RuntimeExpressionSite::new(
+            Default::default(),
+            Default::default(),
+            Some(RuntimeExpressionTyping {
+                environment: names
+                    .iter()
+                    .map(|name| (crate::VarName::new(*name), StreamType::Int))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+                    .into(),
+                expected: StreamType::Int,
+            }),
+        )
+    }
+
     use super::*;
     use crate::VarName;
     use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
@@ -419,6 +436,7 @@ mod tests {
         kind: ReconfigurableExpressionKind,
         variables: &[&str],
     ) -> (BoundReconfigurableExpressionSpec, Rc<EnvironmentLayout>) {
+        let site = int_source_site(variables);
         let variables = variables
             .iter()
             .map(|name| VarName::new(*name))
@@ -430,7 +448,7 @@ mod tests {
                 allowed_variables: variables.into_iter().collect(),
             },
             kind,
-            site: RuntimeExpressionSite::default(),
+            site: site,
             specialise: false,
         };
         (spec, environment)
@@ -451,6 +469,20 @@ mod tests {
         }
     }
 
+    fn shared_int_typing() -> RuntimeExpressionTyping {
+        thread_local! {
+            static ENVIRONMENT: AstShared<crate::lang::dsrv::type_checker::StreamTypes> =
+                AstShared::new(std::collections::BTreeMap::from([
+                    (VarName::new("x"), StreamType::Int),
+                    (VarName::new("y"), StreamType::Int),
+                ]));
+        }
+        RuntimeExpressionTyping {
+            environment: ENVIRONMENT.with(Clone::clone),
+            expected: StreamType::Int,
+        }
+    }
+
     fn dynamic_spec(
         scope: ReconfigurableExpressionScope,
         kind: ReconfigurableExpressionKind,
@@ -461,11 +493,15 @@ mod tests {
             scope,
             kind,
             specialise: typing.is_some(),
-            site: RuntimeExpressionSite::new(Default::default(), Default::default(), typing),
+            site: RuntimeExpressionSite::new(
+                Default::default(),
+                Default::default(),
+                Some(typing.unwrap_or_else(shared_int_typing)),
+            ),
         }
     }
 
-    /// An untyped site whose source context names `alias` as `Int`.
+    /// A concrete site whose source context names `alias` as `Int`.
     fn alias_site(alias: &str) -> RuntimeExpressionSite {
         let mut builder = crate::lang::dsrv::source::SourceContext::builder();
         builder
@@ -477,7 +513,7 @@ mod tests {
         RuntimeExpressionSite::new(
             crate::lang::dsrv::ast::AstShared::new(builder.build().unwrap()),
             Default::default(),
-            None,
+            Some(shared_int_typing()),
         )
     }
 
@@ -536,10 +572,7 @@ mod tests {
             .find(|(_, file)| file.label() == &label("lib.dsrv"))
             .map(|(_, file)| std::sync::Arc::downgrade(file))
             .unwrap();
-        let elaborated = spec
-            .check_and_elaborate(crate::TypeCheckOptions::STRICT)
-            .without_warnings()
-            .unwrap();
+        let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
         let site = elaborated
             .var_expr_ref(&VarName::new("y"))
             .unwrap()
@@ -629,7 +662,7 @@ mod tests {
             .map(|(_, file)| std::sync::Arc::downgrade(file))
             .unwrap();
         let elaborated = specification
-            .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+            .check_and_elaborate()
             .without_warnings()
             .unwrap();
         let site = elaborated
@@ -649,7 +682,7 @@ mod tests {
     #[test]
     fn runtime_source_uses_the_owning_alias_context() {
         let (mut spec, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &["x"]);
-        let source = "\\v: U -> v + x".into();
+        let source = "(\\v: U -> v + x)(1)".into();
         assert!(compile_dynamic_expression(&source, &spec, &environment).is_err());
         spec.site = alias_site("U");
         assert!(compile_dynamic_expression(&source, &spec, &environment).is_ok());
@@ -892,7 +925,7 @@ mod tests {
             ReconfigurableExpressionKind::Dynamic,
             Some(RuntimeExpressionTyping {
                 environment: AstShared::clone(&type_environment_a),
-                expected: crate::lang::dsrv::type_checker::TCType::Int,
+                expected: crate::core::StreamType::Int,
             }),
         );
         let typed_spec_b = dynamic_spec(
@@ -900,7 +933,7 @@ mod tests {
             ReconfigurableExpressionKind::Dynamic,
             Some(RuntimeExpressionTyping {
                 environment: AstShared::clone(&type_environment_b),
-                expected: crate::lang::dsrv::type_checker::TCType::Int,
+                expected: crate::core::StreamType::Int,
             }),
         );
         let typed_first = cache_template(&mut cache, "x", &typed_spec_a, &environment_a);
@@ -914,16 +947,14 @@ mod tests {
             ReconfigurableExpressionKind::Dynamic,
             Some(RuntimeExpressionTyping {
                 environment: AstShared::clone(&type_environment_a),
-                expected: crate::lang::dsrv::type_checker::TCType::Any,
+                expected: crate::core::StreamType::Bool,
             }),
         );
-        let different_expected_type = cache_template(
-            &mut cache,
-            "x",
-            &different_expected_type_spec,
-            &environment_a,
+        assert!(
+            cache
+                .lookup(&"x".into(), &different_expected_type_spec, &environment_a)
+                .is_none()
         );
-        assert!(!Rc::ptr_eq(&typed_first, &different_expected_type));
     }
 
     #[test]

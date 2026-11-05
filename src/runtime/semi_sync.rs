@@ -1451,7 +1451,7 @@ mod tests {
     }
 
     fn external_input_context() -> super::SemiSyncContext<SemiSyncValueConfig> {
-        let source = "in x\nout z\nz = x";
+        let source = "in x: Int\nout z\nz = x";
         let spec = elaborated(&source);
         super::SemiSyncContextBuilder::<SemiSyncValueConfig>::new()
             .variables(BTreeMap::from([(
@@ -1599,7 +1599,7 @@ mod tests {
     async fn input_failure_closes_output_writer_and_preserves_primary_error(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = elaborated("in x\nout z\nz = x");
+        let spec = elaborated("in x: Int\nout z\nz = x");
         let (output_writer, closes) = recording_writer(Some(OutputError::backend("close failed")));
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor)
@@ -1635,7 +1635,7 @@ mod tests {
             BTreeMap::new(),
             BTreeSet::new(),
         )
-        .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+        .check_and_elaborate()
         .without_warnings()
         .unwrap();
         let (output_writer, closes) = recording_writer(Some(OutputError::backend("close failed")));
@@ -1662,7 +1662,7 @@ mod tests {
     async fn mismatched_starting_history_closes_output_writer(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = elaborated("in x\nout z\nz = x");
+        let spec = elaborated("in x: Int\nout z\nz = x");
         let (output_writer, closes) = recording_writer(None);
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor)
@@ -1730,10 +1730,10 @@ mod tests {
             BTreeSet::from([VarName::new("x")]),
             BTreeSet::new(),
             BTreeMap::new(),
-            BTreeMap::new(),
+            BTreeMap::from([(VarName::new("x"), crate::core::StreamType::Int)]),
             BTreeSet::new(),
         )
-        .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+        .check_and_elaborate()
         .without_warnings()
         .unwrap();
         let (output_writer, closes) = recording_writer(None);
@@ -1764,7 +1764,7 @@ mod tests {
             drain_started_by_stream.set(true);
             Poll::Pending
         }));
-        let spec = elaborated("in x\nout z\nz = x");
+        let spec = elaborated("in x: Int\nout z\nz = x");
         let context = super::SemiSyncContextBuilder::<SemiSyncValueConfig>::new()
             .variables(BTreeMap::from([(
                 VarName::new("x"),
@@ -1846,7 +1846,7 @@ mod tests {
     async fn intentional_downstream_closed_cancels_pending_input(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = elaborated("in x\nout z\nz = 1");
+        let spec = elaborated("in x: Int\nout z\nz = 1");
         let input: InputStream<Value> = Box::pin(
             futures::stream::iter([Ok(InputBatch::update("x", Value::Int(1)))])
                 .chain(futures::stream::pending()),
@@ -1971,7 +1971,7 @@ mod tests {
     async fn direct_writer_preserves_one_complete_row_per_semisync_step(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = elaborated("in x\nin y\nout z\nz = x + y");
+        let spec = elaborated("in x: Int\nin y: Int\nout z\nz = x + y");
         let input = map::input_stream(BTreeMap::from([
             (VarName::new("x"), int_values(&[1, 2, 3])),
             (VarName::new("y"), int_values(&[10, 20, 30])),
@@ -2004,7 +2004,7 @@ mod tests {
         let cases = vec![
             CompatibilityCase {
                 name: "external passthrough",
-                specification: "in x\nout z\nz = x",
+                specification: "in x: Int\nout z\nz = x",
                 inputs: BTreeMap::from([("x".into(), int_values(&[1, 2, 3]))]),
                 expected: vec![
                     output([("z", Value::Int(1))]),
@@ -2014,7 +2014,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "external fan-in",
-                specification: "in x\nin y\nout z\nz = x + y",
+                specification: "in x: Int\nin y: Int\nout z\nz = x + y",
                 inputs: BTreeMap::from([
                     ("x".into(), int_values(&[1, 2, 3])),
                     ("y".into(), int_values(&[10, 20, 30])),
@@ -2027,7 +2027,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "computed fan-out",
-                specification: "in x\nout a\nout b\na = x + 1\nb = x * 2",
+                specification: "in x: Int\nout a\nout b\na = x + 1\nb = x * 2",
                 inputs: BTreeMap::from([("x".into(), int_values(&[1, 2, 3]))]),
                 expected: vec![
                     output([("a", Value::Int(2)), ("b", Value::Int(2))]),
@@ -2037,7 +2037,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "reverse-declared computed chain",
-                specification: "in x\nout c\nout b\nout a\nc = b + 1\nb = a + 1\na = x + 1",
+                specification: "in x: Int\nout c\nout b\nout a\nc = b + 1\nb = a + 1\na = x + 1",
                 inputs: BTreeMap::from([("x".into(), int_values(&[1, 2, 3]))]),
                 expected: vec![
                     output([
@@ -2059,7 +2059,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "diamond dependency",
-                specification: "in x\nout a\nout b\nout z\na = x + 1\nb = x * 2\nz = a + b",
+                specification: "in x: Int\nout a\nout b\nout z\na = x + 1\nb = x * 2\nz = a + b",
                 inputs: BTreeMap::from([("x".into(), int_values(&[1, 2, 3]))]),
                 expected: vec![
                     output([
@@ -2081,7 +2081,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "independent branches recombine",
-                specification: "in x\nin y\nout a\nout b\nout z\na = x + 1\nb = y * 2\nz = a + b",
+                specification: "in x: Int\nin y: Int\nout a\nout b\nout z\na = x + 1\nb = y * 2\nz = a + b",
                 inputs: BTreeMap::from([
                     ("x".into(), int_values(&[1, 2, 3])),
                     ("y".into(), int_values(&[10, 20, 30])),
@@ -2106,7 +2106,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "auxiliary computed chain",
-                specification: "in x\nout z\naux a\naux b\na = x + 1\nb = a * 2\nz = b + 1",
+                specification: "in x: Int\nout z\naux a\naux b\na = x + 1\nb = a * 2\nz = b + 1",
                 inputs: BTreeMap::from([("x".into(), int_values(&[1, 2, 3]))]),
                 expected: vec![
                     output([("z", Value::Int(5))]),
@@ -2116,7 +2116,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "external history",
-                specification: "in x\nout z\nz = x + default(x[1], 0)",
+                specification: "in x: Int\nout z\nz = x + default(x[1], 0)",
                 inputs: BTreeMap::from([("x".into(), int_values(&[1, 2, 3]))]),
                 expected: vec![
                     output([("z", Value::Int(1))]),
@@ -2126,7 +2126,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "recursive computed history",
-                specification: "in x\nout z\nz = x + default(z[1], 0)",
+                specification: "in x: Int\nout z: Int\nz = x + default(z[1], 0)",
                 inputs: BTreeMap::from([("x".into(), int_values(&[1, 2, 3]))]),
                 expected: vec![
                     output([("z", Value::Int(1))]),
@@ -2136,7 +2136,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "conditional external selection",
-                specification: "in x\nin y\nin flag\nout z\nz = if flag then x else y",
+                specification: "in x: Int\nin y: Int\nin flag: Bool\nout z\nz = if flag then x else y",
                 inputs: BTreeMap::from([
                     (
                         "flag".into(),
@@ -2153,7 +2153,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "explicit no-value propagation",
-                specification: "in x\nout z\nz = x",
+                specification: "in x: Int\nout z\nz = x",
                 inputs: BTreeMap::from([(
                     "x".into(),
                     vec![Value::Int(1), Value::NoVal, Value::Int(3)],
@@ -2166,7 +2166,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "dynamic external expression",
-                specification: "in x\nin e\nout z\nz = dynamic(e)",
+                specification: "in x: Int\nin e: Str\nout z\nz = dynamic(e: Int)",
                 inputs: BTreeMap::from([
                     (
                         "e".into(),
@@ -2182,7 +2182,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "four-way external fan-in",
-                specification: "in a\nin b\nin c\nin d\nout z\nz = a + b + c + d",
+                specification: "in a: Int\nin b: Int\nin c: Int\nin d: Int\nout z\nz = a + b + c + d",
                 inputs: BTreeMap::from([
                     ("a".into(), int_values(&[1, 2, 3])),
                     ("b".into(), int_values(&[10, 20, 30])),
@@ -2197,7 +2197,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "computed history after external transformation",
-                specification: "in x\nout a\nout z\na = x + 1\nz = a + default(a[1], 0)",
+                specification: "in x: Int\nout a\nout z\na = x + 1\nz = a + default(a[1], 0)",
                 inputs: BTreeMap::from([("x".into(), int_values(&[1, 2, 3]))]),
                 expected: vec![
                     output([("a", Value::Int(2)), ("z", Value::Int(2))]),
@@ -2207,7 +2207,7 @@ mod tests {
             },
             CompatibilityCase {
                 name: "multi-stage cross dependency",
-                specification: "in x\nin y\nout a\nout b\nout z\na = x + y\nb = a + x\nz = b + y",
+                specification: "in x: Int\nin y: Int\nout a\nout b\nout z\na = x + y\nb = a + x\nz = b + y",
                 inputs: BTreeMap::from([
                     ("x".into(), int_values(&[1, 2, 3])),
                     ("y".into(), int_values(&[10, 20, 30])),
@@ -2239,7 +2239,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn sparse_event_ticks_preserve_exact_output_order(executor: Rc<LocalExecutor<'static>>) {
-        let source = "in x\nin y\nout ox\nout oy\nox = x\noy = y";
+        let source = "in x: Int\nin y: Int\nout ox\nout oy\nox = x\noy = y";
         let spec = elaborated(&source);
         let input: InputStream<Value> =
             Box::pin(futures::stream::iter([Ok(InputBatch::from_ticks(vec![
@@ -2369,7 +2369,7 @@ mod tests {
         // Tests that monitor correctly shuts down when there are multiple outputs that depend
         // on each other
         // (There was a bug where output stream cancellation did not propagate properly)
-        let spec = "in x\nout a\nout b\na = x\nb = a + 1";
+        let spec = "in x: Int\nout a\nout b\na = x\nb = a + 1";
         let spec = elaborated(&spec);
 
         let x = vec![0.into(), 1.into(), 2.into()];
@@ -2413,7 +2413,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
-        let spec = elaborated("in x\nin e\nout z\nz = dynamic(e)");
+        let spec = elaborated("in x: Int\nin e: Str\nout z\nz = dynamic(e: Int)");
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -2715,7 +2715,7 @@ mod tests {
         // was causing a deadlock
 
         // Naming is important here... Regression was caused by waiting for a before b
-        let spec = "in x\nout a\naux b\nb = x\na = b";
+        let spec = "in x: Int\nout a\naux b\nb = x\na = b";
         let spec = elaborated(&spec);
 
         let x = vec![0.into(), 1.into(), 2.into()];
@@ -2764,7 +2764,7 @@ mod tests {
     //     // step
     //     for time_index in 1..CHANNEL_SIZE {
     //         // Note: z has time index of `time_index` which means we should maintain history for it
-    //         let spec_str = format!("in x\nout z\nz = default(z[{}], 0) + x", time_index);
+    //         let spec_str = format!("in x: Int\nout z: Int\nz = default(z[{}], 0) + x", time_index);
     //         let spec = parse_str(spec_str.as_str()).unwrap();
     //         let x_stream: LocalStream<Value> = Box::pin(futures::stream::iter(
     //             (0..CHANNEL_SIZE).map(|x| (x as i64).into()),

@@ -451,7 +451,7 @@ fn collect_required_concrete_inputs(
         return;
     }
 
-    match &without_checks(expression).kind {
+    match &expression.kind {
         E::Not(value) => collect_required_concrete_inputs(value, plan, required),
         E::Binary(left, right, operator)
             if matches!(operator.kind(), BinaryOperatorKind::Boolean(_)) =>
@@ -468,16 +468,6 @@ fn collect_required_concrete_inputs(
     }
 }
 
-/// The expression under any `Check` wrappers. A `Check` only asserts the
-/// run-time type of an `Any` value, which says nothing about the symbolic
-/// structure the SAT solver works on.
-fn without_checks(mut expression: &ConstraintExpr) -> &ConstraintExpr {
-    while let ConstraintExprKind::Check(value, _) = &expression.kind {
-        expression = value;
-    }
-    expression
-}
-
 fn is_symbolically_compilable(
     expression: &ConstraintExpr,
     plan: &DistributionConstraintPlan,
@@ -492,7 +482,7 @@ fn is_symbolically_compilable(
         return true;
     }
 
-    match &without_checks(expression).kind {
+    match &expression.kind {
         E::Value(Value::Bool(_)) | E::MonitoredAt(_, _) => true,
         E::Variable(variable) if plan.input_dependencies().contains(variable) => true,
         E::Variable(variable) => {
@@ -560,7 +550,6 @@ fn collect_input_dependencies(
         | E::Abs(value)
         | E::Unary(value, _)
         | E::Cast(value, _)
-        | E::Check(value, _)
         | E::ListHead(value)
         | E::ListTail(value)
         | E::ListLen(value)
@@ -664,7 +653,7 @@ fn guarded_monitored_choices(
         };
     }
 
-    match &without_checks(expression).kind {
+    match &expression.kind {
         ConstraintExprKind::MonitoredAt(variable, node) => Ok(GuardedChoice::Choices(vec![(
             variable.clone(),
             node.clone(),
@@ -950,7 +939,7 @@ fn compile_expr_to_lit(
 ) -> Result<Lit, SatCompileError> {
     use ConstraintExprKind as E;
 
-    match &without_checks(expression).kind {
+    match &expression.kind {
         E::MonitoredAt(variable, node) => {
             Ok(st.atom_for_monitored_at(variable.clone(), node.clone()))
         }
@@ -1231,7 +1220,7 @@ mod tests {
 
     #[apply(crate::async_test)]
     async fn sat_solver_finds_valid_assignment(_executor: Rc<LocalExecutor<'static>>) {
-        let spec_src = "language distributed\nin x\nout c\nc = monitored_at(x, A)";
+        let spec_src = "language distributed\nin x: Int\nout c\nc = monitored_at(x, A)";
         let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
@@ -1257,8 +1246,7 @@ mod tests {
     async fn sat_solver_returns_empty_stream_on_unsat_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec_src =
-            "language distributed\nin x\nout c\nc = (monitored_at(x, A) && monitored_at(x, B))";
+        let spec_src = "language distributed\nin x: Int\nout c\nc = (monitored_at(x, A) && monitored_at(x, B))";
         let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
@@ -1279,14 +1267,14 @@ mod tests {
     fn sat_inequality_matches_direct_constraint_truth_and_satisfiability() {
         let cases = [
             (
-                "in a\nin b\nout c\nc = a != b",
+                "in a: Bool\nin b: Bool\nout c\nc = a != b",
                 "c",
                 true,
                 Some(("a", "b")),
                 false,
             ),
             (
-                "in a\nin b\nin c\nout d\nd = if a then b != c else b == c",
+                "in a: Bool\nin b: Bool\nin c: Bool\nout d\nd = if a then b != c else b == c",
                 "d",
                 true,
                 None,
@@ -1295,7 +1283,7 @@ mod tests {
             ("out c\nc = true != false", "c", true, None, true),
             ("out c\nc = true != true", "c", false, None, true),
             (
-                "in a\nout c\nc = a != a",
+                "in a: Bool\nout c\nc = a != a",
                 "c",
                 false,
                 Some(("a", "a")),
@@ -1350,7 +1338,7 @@ mod tests {
 
     #[apply(crate::async_test)]
     async fn sat_solver_handles_if_then_else_monitored_at(_executor: Rc<LocalExecutor<'static>>) {
-        let spec_src = "language distributed\nin c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
+        let spec_src = "language distributed\nin c: Bool\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
         let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
@@ -1421,7 +1409,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_panics_on_unsupported_dist_constraint() {
-        let spec_src = "language distributed\nin x\nout c\nc = dist(A, B)";
+        let spec_src = "language distributed\nin x: Int\nout c\nc = dist(A, B)";
         let spec = crate::dsrv_fixtures::elaborated(spec_src);
 
         let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -1439,8 +1427,9 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_try_new_returns_structured_error_for_unsupported_constraint() {
-        let spec =
-            crate::dsrv_fixtures::elaborated("language distributed\nin x\nout c\nc = dist(A, B)");
+        let spec = crate::dsrv_fixtures::elaborated(
+            "language distributed\nin x: Int\nout c\nc = dist(A, B)",
+        );
 
         let result =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -1461,7 +1450,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
     #[test]
     fn sat_solver_lowers_constraints_at_the_localised_boundary() {
         let spec = crate::dsrv_fixtures::elaborated(
-            "language distributed\nin x\nout upstream\nout c\nupstream = x[1]\nc = (upstream == 1) && monitored_at(x, A)",
+            "language distributed\nin x: Int\nout upstream\nout c\nupstream = x[1]\nc = (upstream == 1) && monitored_at(x, A)",
         );
 
         let result =
@@ -1510,7 +1499,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_try_new_wraps_localised_constraint_lowering_errors() {
-        let spec = crate::dsrv_fixtures::elaborated("in x\nout c\nc = x[1]");
+        let spec = crate::dsrv_fixtures::elaborated("in x: Int\nout c\nc = x[1]");
 
         let result =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -1533,7 +1522,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
         _executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = r#"language distributed
-in m
+in m: Map<Int>
 out x
 out c1
 out c2
@@ -1582,7 +1571,7 @@ c5 = monitored_at(x, A)"#;
         _executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = r#"language distributed
-in xs
+in xs: List<Int>
 out x
 out c1
 out c2
@@ -1637,7 +1626,7 @@ c6 = (List.len(List(9, 10, 11)) == 3) && monitored_at(x, A)"#;
         use std::collections::BTreeMap;
 
         let spec_src = r#"language distributed
-in m
+in m: Map<Int>
 out x
 out c
 c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
@@ -1679,7 +1668,7 @@ c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
         use std::collections::BTreeMap;
 
         let spec_src = r#"language distributed
-in xs
+in xs: List<Int>
 out x
 out c
 c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_at(x, A)"#;
@@ -1791,7 +1780,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     #[test]
     fn sat_compiler_inlines_constraint_var_reference() {
         let spec_src =
-            "language distributed\nin x\nout c1\nout c2\nc1 = monitored_at(x, A)\nc2 = c1";
+            "language distributed\nin x: Int\nout c1\nout c2\nc1 = monitored_at(x, A)\nc2 = c1";
         let s = spec_src;
         let spec = s
             .parse::<DsrvSpecification>()
@@ -1824,7 +1813,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn sat_compiler_uses_replay_bound_bool_for_var_to_lit() {
-        let spec_src = "in b\nout c\nc = b";
+        let spec_src = "in b: Bool\nout c\nc = b";
         let s = spec_src;
         let spec = s
             .parse::<DsrvSpecification>()
@@ -1855,7 +1844,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn sat_compiler_allows_unresolved_input_vars_as_symbolic_literals() {
-        let spec_src = "in b\nin c\nout d\nd = (b && c)";
+        let spec_src = "in b: Bool\nin c: Bool\nout d\nd = (b && c)";
         let s = spec_src;
         let spec = s
             .parse::<DsrvSpecification>()
@@ -1888,24 +1877,16 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     }
 
     #[test]
-    fn checked_variables_are_still_symbolic_inputs() {
-        let spec = "in gate\nout c\nc = gate && !gate"
+    fn concrete_variables_are_still_symbolic_inputs() {
+        let spec = "in gate: Bool\nout c\nc = gate && !gate"
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let graph = simple_dist_graph();
         let plan =
             DistributionConstraintPlan::lower(&spec, [VarName::new("c")], ConstraintProfile::Sat)
                 .unwrap();
-        let checked = |expression: &ConstraintExpr| ConstraintExpr {
-            kind: ConstraintExprKind::Check(
-                Box::new(expression.clone()),
-                crate::core::StreamType::Bool,
-            ),
-            span: expression.span.clone(),
-            display: expression.display.clone(),
-        };
         let (gate, negated) = match &plan.expression(&VarName::new("c")).unwrap().kind {
-            ConstraintExprKind::Binary(left, right, _) => (checked(left), checked(right)),
+            ConstraintExprKind::Binary(left, right, _) => (left.clone(), right.clone()),
             _ => panic!("expected binary constraint"),
         };
         assert!(is_symbolically_compilable(
@@ -1918,7 +1899,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         assert!(required.is_empty());
 
         let mut state = CnfCompilerState::new(&graph);
-        let gate = compile_expr_to_lit(&gate, &plan, &mut state).expect("checked input compiles");
+        let gate = compile_expr_to_lit(&gate, &plan, &mut state).expect("symbolic input compiles");
         let negated =
             compile_expr_to_lit(&negated, &plan, &mut state).expect("checked negation compiles");
         assert_eq!(gate, -negated);
@@ -1927,7 +1908,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn unresolved_input_occurrences_share_one_sat_identity() {
-        let spec = "in gate\nout c\nc = gate && !gate"
+        let spec = "in gate: Bool\nout c\nc = gate && !gate"
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let graph = simple_dist_graph();
@@ -1954,7 +1935,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     #[test]
     fn solver_requires_bindings_only_for_non_symbolic_input_expressions() {
         let spec = crate::dsrv_fixtures::elaborated(
-            "language distributed\nin gate\nin threshold\nout x\nout c\nc = gate && (threshold < 5) && monitored_at(x, A)",
+            "language distributed\nin gate: Bool\nin threshold: Int\nout x\nout c\nc = gate && (threshold < 5) && monitored_at(x, A)",
         );
 
         let solver =
@@ -1972,7 +1953,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     #[test]
     fn solver_waits_for_leaf_bindings_when_a_required_local_input_is_derived() {
         let spec = crate::dsrv_fixtures::elaborated(
-            "language distributed\nin threshold\nout upstream\nout x\nout c\nupstream = threshold + 1\nc = (upstream < 5) && monitored_at(x, A)",
+            "language distributed\nin threshold: Int\nout upstream\nout x\nout c\nupstream = threshold + 1\nc = (upstream < 5) && monitored_at(x, A)",
         );
 
         let solver =
@@ -2093,7 +2074,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn sat_compiler_rejects_time_indexed_expressions() {
-        let spec_src = "in x\nout c\nc = x[1]";
+        let spec_src = "in x: Int\nout c\nc = x[1]";
         let s = spec_src;
         let spec = s
             .parse::<DsrvSpecification>()
@@ -2117,7 +2098,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn sat_compiler_rejects_non_constant_non_boolean_arithmetic_constraint() {
-        let spec_src = "in x\nout c\nc = (x + 1)";
+        let spec_src = "in x: Int\nout c\nc = (x + 1)";
         let s = spec_src;
         let spec = s
             .parse::<DsrvSpecification>()
@@ -2151,9 +2132,9 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         use std::collections::BTreeMap;
 
         let spec_src = r#"language distributed
-in m
-in xs
-in n
+in m: Map<Int>
+in xs: List<Int>
+in n: Int
 out x
 out c
 c = (Map.get(m, "k") == 7)
@@ -2273,7 +2254,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
     async fn sat_solver_excludes_dist_constraint_vars_from_assignments(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec_src = "language distributed\nin c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
+        let spec_src = "language distributed\nin c: Bool\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
         let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
@@ -2335,7 +2316,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
 
         // Boolean control inputs used by if-then-else constraints
         for i in 0..constrain_count {
-            lines.push(format!("in c{}", i + 1));
+            lines.push(format!("in c{}: Bool", i + 1));
         }
 
         // Output streams to be assigned
@@ -2625,9 +2606,9 @@ c8 = (true >= false) && monitored_at(x, A)"#;
 
     fn fixed_nontrivial_spec_for_3_nodes() -> (String, Vec<VarName>, Vec<VarName>) {
         let spec = r#"language distributed
-in c1
-in c2
-in c3
+in c1: Bool
+in c2: Bool
+in c3: Bool
 out s1
 out s2
 out s3
@@ -2661,9 +2642,9 @@ dist3 = if c3 then monitored_at(s3, C) else monitored_at(s3, A)
 
     fn spec_3_nodes_nested_bool_constraints() -> (String, Vec<VarName>, Vec<VarName>) {
         let spec = r#"language distributed
-in c1
-in c2
-in c3
+in c1: Bool
+in c2: Bool
+in c3: Bool
 out s1
 out s2
 out s3
@@ -2693,9 +2674,9 @@ d3 = if (c3 => c1) then monitored_at(s3, C) else monitored_at(s3, B)
 
     fn spec_3_nodes_interdependent_constraint_vars() -> (String, Vec<VarName>, Vec<VarName>) {
         let spec = r#"language distributed
-in c1
-in c2
-in c3
+in c1: Bool
+in c2: Bool
+in c3: Bool
 out s1
 out s2
 out s3
@@ -2725,9 +2706,9 @@ d3 = if ((c1 && c2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
 
     fn spec_3_nodes_with_const_and_replay_mixed() -> (String, Vec<VarName>, Vec<VarName>) {
         let spec = r#"language distributed
-in c1
-in c2
-in c3
+in c1: Bool
+in c2: Bool
+in c3: Bool
 out s1
 out s2
 out s3
@@ -2761,9 +2742,9 @@ dist3 = if ((!!c3) == c3) then monitored_at(s3, C) else monitored_at(s3, A)
 
     fn spec_3_nodes_with_aux_intermediate_constraints() -> (String, Vec<VarName>, Vec<VarName>) {
         let spec = r#"language distributed
-in c1
-in c2
-in c3
+in c1: Bool
+in c2: Bool
+in c3: Bool
 out s1
 out s2
 out s3
@@ -2797,10 +2778,10 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
 
     fn spec_3_nodes_with_aux_const_and_replay_mixed() -> (String, Vec<VarName>, Vec<VarName>) {
         let spec = r#"language distributed
-in c1
-in c2
-in c3
-in a
+in c1: Bool
+in c2: Bool
+in c3: Bool
+in a: Bool
 out s1
 out s2
 out s3
@@ -3117,9 +3098,9 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
     #[test]
     fn localise_resolves_helper_inputs_regression() {
         let spec_src = r#"language distributed
-in c1
-in c2
-in c3
+in c1: Bool
+in c2: Bool
+in c3: Bool
 out s1
 out s2
 out s3
@@ -3171,10 +3152,10 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
         _executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = r#"language distributed
-in c1
-in c2
-in c3
-in a
+in c1: Bool
+in c2: Bool
+in c3: Bool
+in a: Bool
 out s1
 out s2
 out s3
@@ -3339,8 +3320,8 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
             b in any::<bool>(),
         ) {
             let spec = r#"language distributed
-in a
-in b
+in a: Bool
+in b: Bool
 out x
 out c
 c = ((!a || !b) == !(a && b)) && monitored_at(x, A)
@@ -3384,8 +3365,8 @@ c = ((!a || !b) == !(a && b)) && monitored_at(x, A)
             b in any::<bool>(),
         ) {
             let spec = r#"language distributed
-in a
-in b
+in a: Bool
+in b: Bool
 out x
 out c
 c = ((!a && !b) == !(a || b)) && monitored_at(x, A)
@@ -3429,8 +3410,8 @@ c = ((!a && !b) == !(a || b)) && monitored_at(x, A)
             b in any::<bool>(),
         ) {
             let spec = r#"language distributed
-in a
-in b
+in a: Bool
+in b: Bool
 out x
 out c
 c = ((a => b) == (!a || b)) && monitored_at(x, A)
@@ -3473,7 +3454,7 @@ c = ((a => b) == (!a || b)) && monitored_at(x, A)
             a in any::<bool>(),
         ) {
             let spec = r#"language distributed
-in a
+in a: Bool
 out x
 out c
 c = (!!a == a) && monitored_at(x, A)
@@ -3516,8 +3497,8 @@ c = (!!a == a) && monitored_at(x, A)
             y in -20i64..=20,
         ) {
             let spec = r#"language distributed
-in x
-in y
+in x: Int
+in y: Int
 out w
 out c
 c = ((x < y) == !(x >= y)) && ((x > y) == !(x <= y)) && monitored_at(w, A)

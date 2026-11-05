@@ -189,8 +189,6 @@ pub enum UnionConformanceCause {
     MissingField(EcoString),
     #[error("unexpected field {0:?}")]
     ExtraField(EcoString),
-    #[error("core conformance cannot establish executable type {0}")]
-    UnsupportedSchema(StreamType),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -256,11 +254,8 @@ fn check_union_inner<'a>(
 }
 
 /// Representation-preserving check: no numeric coercions and no singleton schema inference.
-/// Even `Any` rejects markers recursively inside concrete containers.
 ///
-/// Explicit `Function` and `Expr` schemas require checker-aware evidence unavailable
-/// in core and return `UnsupportedSchema`; their outer runtime representation alone
-/// cannot prove a function signature or the type of executable source.
+/// Function and expression schemas check only their outer runtime representation.
 pub fn check_value_conformance(
     value: &Value,
     expected: &StreamType,
@@ -272,9 +267,7 @@ pub fn check_value_conformance(
         return Err(UnionConformanceError::new(C::Marker));
     }
     match (value, expected) {
-        (_, T::Function(_, _) | T::Expr(_)) => Err(UnionConformanceError::new(
-            C::UnsupportedSchema(expected.clone()),
-        )),
+        (Value::Function(_), T::Function(..)) | (Value::Str(_), T::Expr(_)) => Ok(()),
         (Value::Int(_), T::Int)
         | (Value::Float(_), T::Float)
         | (Value::Str(_), T::Str)
@@ -313,31 +306,8 @@ pub fn check_value_conformance(
                         return Err(UnionConformanceError::new(C::ExtraField(key.clone()))
                             .at(P::Field(key.clone())));
                     }
-                    check_value_conformance(value, &T::Any)
-                        .map_err(|e| e.at(P::Field(key.clone())))?;
+                    check_no_markers(value).map_err(|e| e.at(P::Field(key.clone())))?;
                 }
-            }
-            Ok(())
-        }
-        (_, T::Any) => {
-            match value {
-                Value::List(values) | Value::Tuple(values) => {
-                    for (i, value) in values.iter().enumerate() {
-                        check_value_conformance(value, &T::Any).map_err(|e| e.at(P::Index(i)))?;
-                    }
-                }
-                Value::Map(values) => {
-                    for (key, value) in values {
-                        check_value_conformance(value, &T::Any)
-                            .map_err(|e| e.at(P::Field(key.clone())))?;
-                    }
-                }
-                Value::Union(value) => {
-                    if let Some(payload) = value.payload() {
-                        check_value_conformance(payload, &T::Any).map_err(|e| e.at(P::Payload))?;
-                    }
-                }
-                _ => {}
             }
             Ok(())
         }
@@ -347,12 +317,37 @@ pub fn check_value_conformance(
     }
 }
 
+fn check_no_markers(value: &Value) -> Result<(), UnionConformanceError> {
+    use UnionPathSegment as P;
+    match value {
+        Value::Deferred | Value::NoVal => {
+            return Err(UnionConformanceError::new(UnionConformanceCause::Marker));
+        }
+        Value::List(values) | Value::Tuple(values) => {
+            for (index, value) in values.iter().enumerate() {
+                check_no_markers(value).map_err(|e| e.at(P::Index(index)))?;
+            }
+        }
+        Value::Map(values) => {
+            for (key, value) in values {
+                check_no_markers(value).map_err(|e| e.at(P::Field(key.clone())))?;
+            }
+        }
+        Value::Union(value) => {
+            if let Some(payload) = value.payload() {
+                check_no_markers(payload).map_err(|e| e.at(P::Payload))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::JsonStreamValue;
     use crate::core::ValueMap;
-    use crate::lang::dsrv::type_checker::TCType;
 
     fn schema() -> ClosedUnion<StreamType> {
         ClosedUnion::new([
@@ -366,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn union_schema_canonical_and_transcodes() {
+    fn union_schema_canonical_and_prints() {
         let schema = schema();
         assert_eq!(schema.alternatives()[0].tag(), "Moving");
         assert_eq!(
@@ -382,7 +377,6 @@ mod tests {
         ));
         let ty = StreamType::Union(schema);
         assert_eq!(ty.to_string(), "Union<Moving: List<Int>, Stopped>");
-        assert_eq!(TCType::from_stream_type(&ty).to_stream_type(), Some(ty));
     }
 
     #[test]
@@ -401,16 +395,9 @@ mod tests {
         assert_eq!(error.expected_schema.as_ref(), Some(&schema));
         assert_eq!(error.actual_tag.as_deref(), Some("Moving"));
         assert!(check_union(&UnionValue::new("Stopped", Some(Value::Unit)), &schema).is_err());
-        let nested_marker: Value = UnionValue::new("Anything", Some(Value::NoVal)).into();
-        assert_eq!(
-            check_value_conformance(&nested_marker, &StreamType::Any)
-                .unwrap_err()
-                .cause,
-            UnionConformanceCause::Marker
-        );
         let any_payload = ClosedUnion::new([UnionAlternative::new(
             "Anything",
-            UnionPayload::Of(StreamType::Any),
+            UnionPayload::Of(StreamType::Str),
         )])
         .unwrap();
         assert!(
@@ -527,43 +514,6 @@ mod tests {
         assert!(Value::decode_json(br#"{"$tag":"Moving","payload":[],"extra":1}"#).is_err());
     }
 
-    /// Any relaxes the outer type shape, not the validity of a concrete marker
-    /// nested inside a container or union payload.
-    #[test]
-    fn any_accepts_unknown_concrete_shapes_but_rejects_embedded_markers() {
-        let concrete = Value::Map(ValueMap::from([(
-            "nested".into(),
-            Value::List(vec![Value::Int(1)].into()),
-        )]));
-        assert!(check_value_conformance(&concrete, &StreamType::Any).is_ok());
-
-        let marker = Value::Map(ValueMap::from([(
-            "nested".into(),
-            Value::List(vec![Value::Deferred].into()),
-        )]));
-        let error = check_value_conformance(&marker, &StreamType::Any).unwrap_err();
-        assert_eq!(error.cause, UnionConformanceCause::Marker);
-        assert_eq!(
-            error.path,
-            [
-                UnionPathSegment::Field("nested".into()),
-                UnionPathSegment::Index(0)
-            ]
-        );
-
-        let union: Value = UnionValue::new("Unregistered", Some(marker)).into();
-        let error = check_value_conformance(&union, &StreamType::Any).unwrap_err();
-        assert_eq!(error.cause, UnionConformanceCause::Marker);
-        assert_eq!(
-            error.path,
-            [
-                UnionPathSegment::Payload,
-                UnionPathSegment::Field("nested".into()),
-                UnionPathSegment::Index(0)
-            ]
-        );
-    }
-
     /// Conformance walks nested struct fields and reports the deepest expected
     /// path instead of inferring a singleton runtime schema.
     #[test]
@@ -609,6 +559,84 @@ mod tests {
                 UnionPathSegment::Field("unexpected".into())
             ]
         );
+    }
+
+    #[test]
+    fn open_struct_extra_fields_reject_nested_stream_markers() {
+        use crate::core::values::operations::{ValueOpError, cast};
+        use UnionPathSegment as P;
+
+        let structure = StreamType::Struct(vec![("a".into(), StreamType::Int)].into(), true);
+        let schema = ClosedUnion::new([UnionAlternative::new(
+            "Record",
+            UnionPayload::Of(structure.clone()),
+        )])
+        .unwrap();
+        for marker in [Value::Deferred, Value::NoVal] {
+            for (extra, suffix) in [
+                (marker.clone(), vec![]),
+                (Value::List(vec![marker.clone()].into()), vec![P::Index(0)]),
+                (Value::Tuple(vec![marker.clone()].into()), vec![P::Index(0)]),
+                (
+                    Value::Map(ValueMap::from([("nested".into(), marker.clone())])),
+                    vec![P::Field("nested".into())],
+                ),
+                (
+                    UnionValue::new("Inner", Some(marker.clone())).into(),
+                    vec![P::Payload],
+                ),
+                (
+                    Value::Map(ValueMap::from([(
+                        "items".into(),
+                        Value::Tuple(vec![Value::List(vec![marker.clone()].into())].into()),
+                    )])),
+                    vec![P::Field("items".into()), P::Index(0), P::Index(0)],
+                ),
+            ] {
+                let value = Value::Map(ValueMap::from([
+                    ("a".into(), Value::Int(1)),
+                    ("extra".into(), extra),
+                ]));
+                let mut path = vec![P::Field("extra".into())];
+                path.extend(suffix);
+                let error = check_value_conformance(&value, &structure).unwrap_err();
+                assert_eq!(error.cause, UnionConformanceCause::Marker, "{value:?}");
+                assert_eq!(error.path, path, "{value:?}");
+                assert!(matches!(
+                    cast(value.clone(), &structure),
+                    Err(ValueOpError::InvalidCast { .. })
+                ));
+
+                let union = UnionValue::new("Record", Some(value));
+                let error = check_union(&union, &schema).unwrap_err();
+                path.insert(0, P::Payload);
+                assert_eq!(error.cause, UnionConformanceCause::Marker);
+                assert_eq!(error.path, path);
+                assert_eq!(error.expected_schema.as_ref(), Some(&schema));
+                assert_eq!(error.actual_tag.as_deref(), Some("Record"));
+            }
+        }
+    }
+
+    #[test]
+    fn open_struct_extra_fields_need_no_type_schema() {
+        let structure = StreamType::Struct(vec![("a".into(), StreamType::Int)].into(), true);
+        let extra = Value::List(
+            vec![
+                Value::Int(1),
+                Value::Str("mixed".into()),
+                Value::Tuple(vec![Value::Bool(true), Value::Unit].into()),
+                Value::List(Default::default()),
+                Value::Map(ValueMap::new()),
+                UnionValue::new("Unknown", Some(Value::Unit)).into(),
+            ]
+            .into(),
+        );
+        let value = Value::Map(ValueMap::from([
+            ("a".into(), Value::Int(1)),
+            ("extra".into(), extra),
+        ]));
+        assert_eq!(check_value_conformance(&value, &structure), Ok(()));
     }
 
     // A struct value shared by several payloads conforms on its own terms: a

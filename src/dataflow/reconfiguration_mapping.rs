@@ -335,8 +335,8 @@ mod tests {
 
     #[test]
     fn exact_streams_need_no_owner_enumeration() {
-        let source = compile("in x\nout z\nz = x + 1");
-        let target = compile("in x\nout z\nz = x + 1");
+        let source = compile("in x: Int\nout z\nz = x + 1");
+        let target = compile("in x: Int\nout z\nz = x + 1");
         let mapping = ReconfigurationMapping::between(&source, &target);
 
         assert!(matches!(
@@ -362,8 +362,8 @@ mod tests {
 
     #[test]
     fn changed_streams_are_unmapped_and_start_cold() {
-        let source = compile("in x\nout z\nz = x + 1");
-        let target = compile("in x\nout z\nz = x + 2");
+        let source = compile("in x: Int\nout z\nz = x + 1");
+        let target = compile("in x: Int\nout z\nz = x + 2");
         let mapping = ReconfigurationMapping::between(&source, &target);
 
         assert!(matches!(
@@ -374,8 +374,8 @@ mod tests {
 
     #[test]
     fn streams_are_matched_by_name_across_added_removed_and_reordered_streams() {
-        let source = compile("in x\nout a\nout b\na = x + 1\nb = x + 2");
-        let target = compile("in x\nout b\nout c\nb = x + 2\nc = x + 3");
+        let source = compile("in x: Int\nout a\nout b\na = x + 1\nb = x + 2");
+        let target = compile("in x: Int\nout b\nout c\nb = x + 2\nc = x + 3");
         let mapping = ReconfigurationMapping::between(&source, &target);
 
         let source_b = source
@@ -418,8 +418,8 @@ mod tests {
 
     #[test]
     fn environment_slots_are_remapped_by_variable_name() {
-        let source = compile("in x\nout z\nz = x + 1");
-        let target = compile("in a\nin x\nout z\nz = x + 1");
+        let source = compile("in x: Int\nout z\nz = x + 1");
+        let target = compile("in a: Int\nin x: Int\nout z\nz = x + 1");
         let mapping = ReconfigurationMapping::between(&source, &target);
         let source_x = source
             .environment_layout()
@@ -505,8 +505,8 @@ mod tests {
 
     #[test]
     fn validation_checks_definition_keys_and_source_injectivity() {
-        let source = compile("in x\nout z\nz = x + 1");
-        let target = compile("in x\nout z\nz = x + 2");
+        let source = compile("in x: Int\nout z\nz = x + 1");
+        let target = compile("in x: Int\nout z\nz = x + 2");
         let mut key_mismatch = ReconfigurationMapping::between(&source, &target);
         key_mismatch.source_definition = DefinitionKey::from_canonical("wrong");
         assert!(matches!(
@@ -514,8 +514,8 @@ mod tests {
             Err(ReconfigurationMappingError::DefinitionKeyMismatch { side: "source", .. })
         ));
 
-        let source = compile("in x\nout a\nout b\na = x + 1\nb = x + 2");
-        let target = compile("in x\nout a\nout b\na = x + 1\nb = x + 2");
+        let source = compile("in x: Int\nout a\nout b\na = x + 1\nb = x + 2");
+        let target = compile("in x: Int\nout a\nout b\na = x + 1\nb = x + 2");
         let mut duplicate = ReconfigurationMapping::between(&source, &target);
         duplicate.streams[1] = StreamMapping::Exact(StreamId::new(0));
         assert_eq!(

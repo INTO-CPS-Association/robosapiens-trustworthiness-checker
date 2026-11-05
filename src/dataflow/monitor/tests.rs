@@ -118,7 +118,7 @@ fn replacement_checks_cycles_for_defer_sources_with_colliding_address_spellings(
             annotations,
             [],
         )
-        .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .unwrap();
         DataflowProgram::compile_checked(specification).unwrap()
@@ -2501,7 +2501,7 @@ fn lifecycle_compile_once_clones_payload_but_not_session_state() {
     DataflowProgram::reset_root_compile_counts();
     crate::lang::dsrv::reset_test_pipeline_counts();
     let specification = elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x");
-    assert_eq!(crate::lang::dsrv::test_pipeline_counts(), (1, 0, 1));
+    assert_eq!(crate::lang::dsrv::test_pipeline_counts(), (1, 1));
     let program = DataflowProgram::compile_with_semantics(specification, Semantics::Untimed);
     let program = program.expect("counter specification should compile");
     assert_eq!(DataflowProgram::root_compile_counts(), (0, 1));
@@ -2535,7 +2535,7 @@ fn lifecycle_compile_once_clones_payload_but_not_session_state() {
     assert_eq!(DataflowProgram::root_compile_counts(), (0, 1));
     assert_eq!(
         crate::lang::dsrv::test_pipeline_counts(),
-        (1, 0, 1),
+        (1, 1),
         "cloning and monitor construction must not parse or type-check the root again"
     );
 
@@ -2884,7 +2884,7 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
         BTreeMap::from([(VarName::new("source"), crate::core::StreamType::Int)]),
         [],
     )
-    .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+    .check_and_elaborate()
     .without_warnings()
     .expect("complete-value spec should check");
     let expected_order = crate::core::Specification::output_vars_in_order(&specification);
@@ -3696,7 +3696,7 @@ fn labelled_program(prefix: &str, lib: &str) -> crate::lang::dsrv::ElaboratedDsr
     collector.supply_labelled(lib, label("lib.dsrv")).unwrap();
     crate::lang::dsrv::expand::expand_program(collector.finish().unwrap(), Default::default())
         .unwrap()
-        .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .unwrap()
 }
@@ -3763,7 +3763,7 @@ fn library_helper_program(lib: &str) -> crate::lang::dsrv::ElaboratedDsrvSpecifi
     collector.supply(lib).unwrap();
     crate::lang::dsrv::expand::expand_program(collector.finish().unwrap(), Default::default())
         .unwrap()
-        .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .unwrap()
 }
@@ -3850,14 +3850,14 @@ fn changed_library_settings_change_the_dynamic_stream() {
 /// Allocations made by evaluating a warm monitor, tick after tick.
 mod steady_state_allocations {
     use super::*;
+    use crate::VarName;
     use crate::allocation_counter::{Allocations, allocations};
-    use crate::{TypeCheckOptions, VarName};
 
     const TICKS: usize = 100;
 
     /// What `TICKS` evaluations of a warm monitor for `source` allocate, with inputs given by name.
     fn allocations_over_ticks(source: &str, inputs: &[(&str, Value)]) -> Allocations {
-        let spec = crate::dsrv_fixtures::elaborated_with(source, TypeCheckOptions::GRADUAL);
+        let spec = crate::dsrv_fixtures::elaborated(source);
         let mut monitor =
             DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
         let input: Vec<Value> = monitor
@@ -4326,12 +4326,12 @@ fn an_input_nothing_reads_changes_the_definition_key_when_its_type_changes() {
 fn a_retyped_aux_stream_a_dynamic_may_read_starts_that_dynamic_cold() {
     let program = |aux_type: &str| {
         DataflowProgram::compile_checked(elaborated(&format!(
-            "in w: Int\nin s: Str\naux a: {aux_type}\nout y: Bool\na = w\ny = dynamic(s: Bool)"
+            "in w: Int\nin s: Str\naux a: {aux_type}\nout y: Bool\na = 1\ny = dynamic(s: Bool)"
         )))
         .unwrap()
     };
     let source = program("Int");
-    let target = program("Any");
+    let target = program("Float");
     assert_ne!(source.definition_key(), target.definition_key());
 
     let mut output = [Value::NoVal];
@@ -4380,13 +4380,13 @@ fn a_program_without_streams_still_records_its_input_types() {
 fn a_changed_output_type_changes_the_definition_key() {
     let program = |output_type: &str| {
         DataflowProgram::compile_checked(elaborated(&format!(
-            "in x: Int\nout y: {output_type}\ny = x"
+            "in x: Int\nout y: {output_type}\ny = 1"
         )))
         .unwrap()
     };
     assert_ne!(
         program("Int").definition_key(),
-        program("Any").definition_key()
+        program("Float").definition_key()
     );
 }
 
@@ -4418,36 +4418,6 @@ fn runtime_text_literal_takes_the_float_type_its_site_expects() {
     );
 }
 
-fn evaluate_text_with_any_input(input: Value, text: &str) -> Result<[Value; 1], String> {
-    let program = DataflowProgram::compile_checked(elaborated(
-        "in x: Any\nin s: Str\nout y: Bool\ny = dynamic(s: Bool)",
-    ))
-    .unwrap();
-    let mut monitor = DataflowMonitor::from_program(program);
-    let mut output = [Value::NoVal];
-    let row = input_row(&monitor, &[("x", input), ("s", Value::Str(text.into()))]);
-    monitor
-        .evaluate(&row, &mut output)
-        .map(|_| output)
-        .map_err(|error| error.to_string())
-}
-
-/// Checking accepts an `Any` value at a concrete type on condition that it is
-/// checked as it runs, in text as in a specification.
-#[test]
-fn runtime_text_checks_an_any_value_where_it_is_used_at_a_concrete_type() {
-    assert_eq!(
-        evaluate_text_with_any_input(Value::Float(3.5), "trunc(x) > 0"),
-        Ok([Value::Bool(true)])
-    );
-    let refused = evaluate_text_with_any_input(Value::Int(3), "trunc(x) > 0").unwrap_err();
-    assert!(refused.contains("expected Float, got Int 3"), "{refused}");
-    assert!(refused.contains("<runtime expression>"), "{refused}");
-
-    let refused = evaluate_text_with_any_input(Value::Str("a".into()), "x + 1 > 0").unwrap_err();
-    assert!(refused.contains("expected Int"), "{refused}");
-}
-
 /// `trunc` takes a `Float`, and an `Int` is refused before anything runs,
 /// because a value of a declared type needs no check.
 #[test]
@@ -4467,4 +4437,34 @@ fn runtime_text_applying_trunc_to_an_int_is_a_type_error() {
     );
     let refused = monitor.evaluate(&row, &mut output).unwrap_err().to_string();
     assert!(refused.contains("expected Float, got Int"), "{refused}");
+}
+
+#[test]
+fn an_empty_collection_given_its_type_by_a_cast_evaluates_as_one() {
+    for (equation, expected) in [
+        ("out y: Int = List.len([] as List<Int>)", Value::Int(0)),
+        (
+            "type Ints = List<Int>\nout y: Int = List.len([] as Ints)",
+            Value::Int(0),
+        ),
+        (
+            "out y: List<Int> = List.append([] as List<Int>, x)",
+            Value::List(vec![Value::Int(1)].into()),
+        ),
+        (
+            "out y: List<Int> = [] as List<Int>",
+            Value::List(vec![].into()),
+        ),
+        (
+            "out y: Bool = Map.has_key(Map() as Map<Int>, \"a\")",
+            Value::Bool(false),
+        ),
+    ] {
+        let source = format!("in x: Int\n{equation}");
+        let program = DataflowProgram::compile_checked(elaborated(&source)).unwrap();
+        let mut monitor = DataflowMonitor::from_program(program);
+        let mut output = [Value::NoVal];
+        monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
+        assert_eq!(output, [expected], "{source}");
+    }
 }

@@ -12,7 +12,6 @@ use crate::Value;
 use crate::VarName;
 use crate::dataflow::DataflowMonitor;
 use crate::dsrv_fixtures::WithoutWarnings;
-use crate::lang::dsrv::TypeCheckOptions;
 use crate::lang::dsrv::ast::{DsrvSpecification, ExprRef};
 use crate::lang::dsrv::expand::DsrvExpandError;
 use crate::lang::dsrv::expand::language::{Dialect, LanguageError};
@@ -67,7 +66,7 @@ fn body(spec: &DsrvSpecification, var: &str) -> String {
 
 fn evaluate_only_output(specification: DsrvSpecification) -> Value {
     let elaborated = specification
-        .check_and_elaborate(TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .unwrap();
     let mut monitor = DataflowMonitor::compile_checked(elaborated).unwrap();
@@ -121,7 +120,7 @@ fn a_library_body_may_use_syntax_its_own_header_enables() {
         &format!("{ROOT}mod lib\nuse lib\nout y: Int\ny = lib::half()\n"),
         &[("lib", MATCHING_LIB)],
     );
-    spec.check(TypeCheckOptions::STRICT)
+    spec.check()
         .discard_warnings()
         .expect("the library's match expression checks");
 }
@@ -195,7 +194,7 @@ fn a_library_body_resolves_types_in_its_own_namespace() {
         &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Int\ny = lib::further(x)\n"),
         &[("lib", lib)],
     );
-    spec.check(TypeCheckOptions::STRICT)
+    spec.check()
         .discard_warnings()
         .expect("Meters is the library's name");
 }
@@ -216,7 +215,7 @@ fn a_callers_alias_does_not_shadow_the_librarys() {
         "{}",
         body(&spec, "y")
     );
-    spec.check(TypeCheckOptions::STRICT)
+    spec.check()
         .discard_warnings()
         .expect("the library's Measure is a Float");
 }
@@ -229,10 +228,10 @@ fn a_library_constructor_resolves_in_the_librarys_namespace() {
         type State = Union<Stopped, Moving: Int>\nuse self::State::*\n\
         def start(n: Int) -> State = Moving(n)\n";
     let spec = program(
-        &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Any\ny = lib::start(x)\n"),
+        &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y\ny = lib::start(x)\n"),
         &[("lib", lib)],
     );
-    spec.check(TypeCheckOptions::STRICT)
+    spec.check()
         .discard_warnings()
         .expect("the library imported its own tags");
 }
@@ -488,7 +487,7 @@ fn a_library_dynamic_carries_the_librarys_environment() {
 #[test]
 fn text_supplied_to_a_library_dynamic_checks_and_runs_the_librarys_helper() {
     let elaborated = helper_program()
-        .check_and_elaborate(TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .expect("checks");
     let prepared = |var: &str| {
@@ -568,7 +567,7 @@ fn a_finding_in_library_code_is_primary_at_the_call_with_a_definition_note() {
         &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Int\ny = lib::bad(x)\n"),
         &[("lib", lib)],
     )
-    .check(TypeCheckOptions::STRICT)
+    .check()
     .discard_warnings()
     .expect_err("bad does not check");
     let location = errors[0].location();
@@ -583,23 +582,27 @@ fn a_finding_in_library_code_is_primary_at_the_call_with_a_definition_note() {
 
 #[test]
 fn an_imported_result_contract_names_its_definition() {
-    let lib = "use experimental::{modules, functions}\ndef bad(n: Int) -> Bool = n\n";
-    let errors = program(
-        &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Bool\ny = lib::bad(x)\n"),
-        &[("lib", lib)],
-    )
-    .check(TypeCheckOptions::STRICT)
-    .discard_warnings()
-    .expect_err("the body does not return the declared Bool");
-    let location = errors[0].location();
-    assert_eq!(
-        named(location.primary()),
-        Some(("root.dsrv".to_owned(), "lib::bad(x)".to_owned()))
-    );
-    assert_eq!(
-        named(location.definition()),
-        Some(("lib.dsrv".to_owned(), "Bool".to_owned()))
-    );
+    for declaration in [
+        "def bad(n: Int) -> Bool = n",
+        "def bad<T>(n: T) -> Bool = n",
+    ] {
+        let lib = format!("use experimental::{{modules, functions, generics}}\n{declaration}\n");
+        let root = "use experimental::{modules, functions, generics}\n\
+                    mod lib\nuse lib\nin x: Int\nout y: Bool\ny = lib::bad(x)\n";
+        let errors = program(root, &[("lib", &lib)])
+            .check()
+            .discard_warnings()
+            .expect_err("the body does not return the declared Bool");
+        let location = errors[0].location();
+        assert_eq!(
+            named(location.primary()),
+            Some(("root.dsrv".to_owned(), "lib::bad(x)".to_owned()))
+        );
+        assert_eq!(
+            named(location.definition()),
+            Some(("lib.dsrv".to_owned(), "Bool".to_owned()))
+        );
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -686,7 +689,7 @@ fn nested_runtime_sites_capture_their_transitive_callable_sources() {
         &[("lib", &lib), ("lib::leaf", &leaf), ("lib::spare", &spare)],
     );
     let elaborated = specification
-        .check_and_elaborate(TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .unwrap();
     let outer = elaborated
@@ -721,7 +724,7 @@ static_assertions::assert_impl_all!(
 #[test]
 fn a_library_site_accepts_text_on_another_thread_after_the_program_is_dropped() {
     let elaborated = helper_program()
-        .check_and_elaborate(TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .expect("checks");
     let site = elaborated
@@ -866,7 +869,7 @@ fn an_if_in_runtime_expression_source_follows_the_module_that_wrote_the_site() {
 fn a_lazy_site_reads_text_on_another_thread_with_its_policy() {
     let root = format!("{ROOT}mod lib\nuse lib\nin s: Str\nout y: Int\ny = lib::read(s)\n");
     let elaborated = program(&root, &[("lib", LAZY_PICK)])
-        .check_and_elaborate(TypeCheckOptions::STRICT)
+        .check_and_elaborate()
         .without_warnings()
         .expect("checks");
     let site = elaborated

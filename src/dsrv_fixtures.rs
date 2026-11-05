@@ -1,5 +1,5 @@
 use crate::{
-    CheckedDsrvSpecification, ElaboratedDsrvSpecification, InputStream, TypeCheckOptions, Value,
+    CheckedDsrvSpecification, ElaboratedDsrvSpecification, InputStream, Value,
     io::map,
     lang::dsrv::diagnostics::{SemanticAnalysisReport, SemanticErrors, SemanticWarning},
     runtime::{
@@ -40,51 +40,33 @@ impl<T> WithoutWarnings<T> for SemanticAnalysisReport<T> {
     }
 }
 
-/// Parse and check a specification with `options`. Panics if it does not
+/// Parse and check a specification with the concrete checker. Panics if it does not
 /// parse or check, or if checking warns.
 #[track_caller]
-pub fn checked_with(source: &str, options: TypeCheckOptions) -> CheckedDsrvSpecification {
-    CheckedDsrvSpecification::parse_with(source, options)
+pub fn checked(source: &str) -> CheckedDsrvSpecification {
+    CheckedDsrvSpecification::parse(source)
         .unwrap_or_else(|error| panic!("{error}\n{source}"))
         .without_warnings()
         .unwrap_or_else(|errors| panic!("{errors:?}\n{source}"))
 }
 
-/// Parse a specification and check it strictly. Panics if it does not parse
-/// or check, or if checking warns.
-#[track_caller]
-pub fn checked(source: &str) -> CheckedDsrvSpecification {
-    checked_with(source, TypeCheckOptions::STRICT)
-}
-
-/// Parse, check and elaborate a specification with `options`. Panics if it
+/// Parse, check and elaborate a specification with the concrete checker. Panics if it
 /// does not parse or check, or if checking warns.
 #[track_caller]
-pub fn elaborated_with(source: &str, options: TypeCheckOptions) -> ElaboratedDsrvSpecification {
-    ElaboratedDsrvSpecification::parse_with(source, options)
+pub fn elaborated(source: &str) -> ElaboratedDsrvSpecification {
+    ElaboratedDsrvSpecification::parse(source)
         .unwrap_or_else(|error| panic!("{error}\n{source}"))
         .without_warnings()
         .unwrap_or_else(|errors| panic!("{errors:?}\n{source}"))
 }
 
-/// Check and elaborate a specification as a runtime with `semantics`
-/// requires. Panics if it does not check, or if checking warns.
+/// Check and elaborate a parsed specification. Panics if it does not check,
+/// or if checking warns.
 #[track_caller]
-pub fn elaborate_for(
-    spec: crate::DsrvSpecification,
-    semantics: crate::core::Semantics,
-) -> ElaboratedDsrvSpecification {
-    spec.check_and_elaborate(crate::runtime::builder::type_check_options(semantics))
+pub fn elaborate(spec: crate::DsrvSpecification) -> ElaboratedDsrvSpecification {
+    spec.check_and_elaborate()
         .without_warnings()
         .unwrap_or_else(|errors| panic!("specification should check: {errors:?}"))
-}
-
-/// Parse a specification, check it gradually and elaborate it, as every
-/// runtime requires. Panics if it does not parse or check, or if checking
-/// warns.
-#[track_caller]
-pub fn elaborated(source: &str) -> ElaboratedDsrvSpecification {
-    elaborated_with(source, TypeCheckOptions::GRADUAL)
 }
 
 /// Present a fixture's warnings by refusing them: fixtures are expected to
@@ -98,11 +80,10 @@ pub fn refuse_warnings(warnings: &[SemanticWarning]) -> anyhow::Result<()> {
 }
 
 /// A replacement preparation for reconfigurable runtimes that checks with
-/// `options` and refuses any warning.
-pub fn replacement_preparation(
-    options: TypeCheckOptions,
-) -> impl Fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification> + 'static {
-    move |source| crate::runtime::builder::prepare_replacement(source, options, refuse_warnings)
+/// the concrete checker and refuses any warning.
+pub fn replacement_preparation()
+-> impl Fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification> + 'static {
+    move |source| crate::runtime::builder::prepare_replacement(source, refuse_warnings)
 }
 
 pub fn empty_input_stream() -> InputStream<Value> {
@@ -166,37 +147,37 @@ pub fn float_pair_input_stream() -> InputStream<Value> {
 
 #[allow(dead_code)]
 pub fn spec_simple_add_monitor() -> &'static str {
-    "in x\n\
-     in y\n\
+    "in x: Int\n\
+     in y: Int\n\
      out z\n\
      z = x + y"
 }
 
 #[allow(dead_code)]
 pub fn spec_simple_add_monitor_plus_one() -> &'static str {
-    "in x\n\
-     in y\n\
+    "in x: Int\n\
+     in y: Int\n\
      out z\n\
      z = x + y + 1"
 }
 
 #[allow(dead_code)]
 pub fn spec_acc_monitor() -> &'static str {
-    "in x\n\
-     out z\n\
+    "in x: Int\n\
+     out z: Int\n\
      z = default(z[1], 0) + x"
 }
 
 #[allow(dead_code)]
 pub fn spec_assignment_monitor() -> &'static str {
-    "in x\n\
+    "in x: Int\n\
      out v\n\
      v = x"
 }
 
 #[allow(dead_code)]
 pub fn spec_assignment2_monitor() -> &'static str {
-    "in x\n\
+    "in x: Int\n\
      out v\n\
      out w\n\
      v = x\n\
@@ -205,8 +186,8 @@ pub fn spec_assignment2_monitor() -> &'static str {
 
 #[allow(dead_code)]
 pub fn spec_simple_add_aux_monitor() -> &'static str {
-    "in x\n\
-     in y\n\
+    "in x: Int\n\
+     in y: Int\n\
      out z\n\
      aux u\n\
      var w\n\
@@ -245,7 +226,7 @@ pub fn spec_simple_add_monitor_typed_float() -> &'static str {
 
 #[allow(dead_code)]
 pub fn spec_sindex() -> &'static str {
-    "in x\n\
+    "in x: Int\n\
      out z\n\
      z = x[1]"
 }
@@ -344,25 +325,25 @@ pub fn maple_invalid_input_stream_2(size: usize) -> InputStream<Value> {
 
 #[allow(dead_code)]
 pub fn spec_simple_add_decomposed_1() -> &'static str {
-    "in x
-     in y
+    "in x: Int
+     in y: Int
      out w
      w = x + y"
 }
 
 #[allow(dead_code)]
 pub fn spec_simple_add_decomposed_2() -> &'static str {
-    "in z
-     in w
+    "in z: Int
+     in w: Int
      out v
      v = z + w"
 }
 
 #[allow(dead_code)]
 pub fn spec_simple_add_decomposable() -> &'static str {
-    "in x
-     in y
-     in z
+    "in x: Int
+     in y: Int
+     in z: Int
      out w
      out v
      w = x + y
@@ -468,9 +449,9 @@ pub fn defer_input_stream_4() -> InputStream<Value> {
 
 #[allow(dead_code)]
 pub fn spec_defer() -> &'static str {
-    "in x
-     in e
-     out z
+    "in x: Int
+     in e: Str
+     out z: Int
      z = defer(e)"
 }
 
@@ -489,10 +470,10 @@ pub fn indexing_input_stream() -> InputStream<Value> {
 
 #[allow(dead_code)]
 pub fn spec_add_defer() -> &'static str {
-    "in x
-     in y
-     in e
-     out z
+    "in x: Int
+     in y: Int
+     in e: Str
+     out z: Int
      z = defer(e)"
 }
 

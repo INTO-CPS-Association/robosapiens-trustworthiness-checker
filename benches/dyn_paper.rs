@@ -22,7 +22,6 @@ use trustworthiness_checker::dsrv_fixtures::{WithoutWarnings, spec_deferred_and}
 use trustworthiness_checker::dsrv_fixtures::{
     direct_paper_benchmark_input_stream, paper_benchmark_input_stream,
 };
-use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -67,7 +66,7 @@ fn from_elem(c: &mut Criterion) {
         .expect("deferred benchmark specification should parse");
     let checked_spec = spec
         .clone()
-        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .check_and_elaborate()
         .without_warnings()
         .expect("deferred benchmark specification should type check");
     let percents = vec![0, 25, 50, 75, 100];

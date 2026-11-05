@@ -16,7 +16,7 @@ use trustworthiness_checker::lang::dsrv::ast::ExprView;
 use trustworthiness_checker::lang::dsrv::parser::{
     parse_expr, parse_str, parse_syntax_for_benchmark,
 };
-use trustworthiness_checker::{DsrvSpecification, TypeCheckOptions, VarName};
+use trustworthiness_checker::{DsrvSpecification, VarName};
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -122,13 +122,7 @@ fn compilation_phases(c: &mut Criterion) {
                         .parse::<DsrvSpecification>()
                         .expect("benchmark source should parse")
                 },
-                |spec| {
-                    black_box(
-                        spec.check(TypeCheckOptions::STRICT)
-                            .discard_warnings()
-                            .unwrap(),
-                    )
-                },
+                |spec| black_box(spec.check().discard_warnings().unwrap()),
                 BatchSize::SmallInput,
             )
         });
@@ -190,10 +184,7 @@ fn compilation_phases(c: &mut Criterion) {
             |b, source| {
                 b.iter(|| {
                     let parsed = parse_str(black_box(source)).unwrap();
-                    let typed = parsed
-                        .check(TypeCheckOptions::STRICT)
-                        .discard_warnings()
-                        .unwrap();
+                    let typed = parsed.check().discard_warnings().unwrap();
                     black_box(DataflowMonitor::compile_checked(typed.elaborate()).unwrap())
                 })
             },
@@ -204,10 +195,7 @@ fn compilation_phases(c: &mut Criterion) {
             |b, source| {
                 b.iter(|| {
                     let parsed = parse_str(black_box(source)).unwrap();
-                    let typed = parsed
-                        .check(TypeCheckOptions::STRICT)
-                        .discard_warnings()
-                        .unwrap();
+                    let typed = parsed.check().discard_warnings().unwrap();
                     black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));
                     black_box(DataflowMonitor::compile_checked(typed.elaborate()).unwrap())
                 })
@@ -246,13 +234,7 @@ fn compilation_phases(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(bindings), |b| {
             b.iter_batched(
                 || parsed.clone(),
-                |spec| {
-                    black_box(
-                        spec.check(TypeCheckOptions::STRICT)
-                            .discard_warnings()
-                            .unwrap(),
-                    )
-                },
+                |spec| black_box(spec.check().discard_warnings().unwrap()),
                 BatchSize::SmallInput,
             )
         });
@@ -299,13 +281,7 @@ fn indexed_arena_comparison(c: &mut Criterion) {
                         .parse::<DsrvSpecification>()
                         .expect("benchmark source should parse")
                 },
-                |spec| {
-                    black_box(
-                        spec.check(TypeCheckOptions::STRICT)
-                            .discard_warnings()
-                            .unwrap(),
-                    )
-                },
+                |spec| black_box(spec.check().discard_warnings().unwrap()),
                 BatchSize::SmallInput,
             )
         });
@@ -468,10 +444,7 @@ fn runtime_expression_acceptance(c: &mut Criterion) {
 
     for operator in ["dynamic", "defer"] {
         let source = format!("in source: Str\nin x: Int\nout z: Int\nz = {operator}(source: Int)");
-        let specification = trustworthiness_checker::dsrv_fixtures::elaborated_with(
-            &source,
-            TypeCheckOptions::GRADUAL,
-        );
+        let specification = trustworthiness_checker::dsrv_fixtures::elaborated(&source);
         let program = DataflowProgram::compile_checked(specification)
             .expect("benchmark specification should compile");
         let monitor = DataflowMonitor::from_program(program.clone());

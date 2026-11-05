@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use ecow::{EcoString, eco_vec};
 
 use super::*;
-use crate::allocation_counter::{Allocations, allocations};
+use crate::allocation_counter::{Allocations, allocations, assert_no_allocations};
 use crate::core::{BinaryOperator, StreamType, UnaryOperator, ValueMap};
 use crate::lang::dsrv::test_support::arb_int_power_case;
 use proptest::prelude::*;
@@ -635,16 +635,13 @@ fn unique_list_edits_allocate_nothing() {
     let mut spare = EcoVec::with_capacity(4);
     spare.extend(records(0..3));
     let x = record(3);
-    let (made, appended) = allocations(|| list_append(Value::List(spare), x));
-    assert_eq!(made, Allocations::default(), "append");
-    let (made, _) = allocations(|| list_tail(appended.unwrap()));
-    assert_eq!(made, Allocations::default(), "tail");
+    let appended = assert_no_allocations(|| list_append(Value::List(spare), x));
+    assert_no_allocations(|| list_tail(appended.unwrap())).expect("the appended list is nonempty");
 
     for mask in 0..8_u32 {
         let decisions: Vec<bool> = (0..3).map(|index| mask & (1 << index) != 0).collect();
         let source = records(0..3);
-        let (made, _) = allocations(|| filtered(source, &decisions));
-        assert_eq!(made, Allocations::default(), "filter {decisions:?}");
+        assert_no_allocations(|| filtered(source, &decisions));
     }
 }
 

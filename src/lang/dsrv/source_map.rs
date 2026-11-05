@@ -511,6 +511,35 @@ impl SourceLocation {
             _ => None,
         }
     }
+
+    pub(crate) fn describe(&self, span: Span) -> String {
+        let mut place = match self.primary() {
+            Some(site) => {
+                let label = site.label();
+                let at = match site.position() {
+                    Some((line, column)) => format!("at {label}:{line}:{column}"),
+                    None => format!("at {label}"),
+                };
+                match site.snippet() {
+                    Some(snippet) => {
+                        format!("{at} (bytes {}..{}): `{snippet}`", span.start, span.end)
+                    }
+                    None => format!("{at} (bytes {}..{})", span.start, span.end),
+                }
+            }
+            None => format!("at bytes {}..{}", span.start, span.end),
+        };
+        if let Some(definition) = self.definition() {
+            let label = definition.label();
+            match definition.position() {
+                Some((line, column)) => {
+                    place.push_str(&format!(", defined at {label}:{line}:{column}"))
+                }
+                None => place.push_str(&format!(", defined in {label}")),
+            }
+        }
+        place
+    }
 }
 
 impl PartialEq for SourceLocation {

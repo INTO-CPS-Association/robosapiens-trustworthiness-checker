@@ -1,7 +1,7 @@
 use std::{io, io::Write as _, process::ExitCode};
 
-use clap::{Parser, ValueEnum};
-use trustworthiness_checker::{cli::expand, lang::dsrv::TypeCheckMode};
+use clap::Parser;
+use trustworthiness_checker::cli::expand;
 
 #[derive(Parser)]
 #[command(
@@ -14,25 +14,15 @@ struct Args {
     model: String,
 
     /// Optionally type-check the expanded program before inspecting it.
-    #[arg(long, value_enum)]
-    check_mode: Option<Mode>,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum Mode {
-    Strict,
-    Gradual,
+    #[arg(long)]
+    check: bool,
 }
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    let mode = args.check_mode.map(|mode| match mode {
-        Mode::Strict => TypeCheckMode::Strict,
-        Mode::Gradual => TypeCheckMode::Gradual,
-    });
     match expand::run_inspection(
         &args.model,
-        mode,
+        args.check,
         &mut io::stdout().lock(),
         &mut io::stderr().lock(),
     ) {

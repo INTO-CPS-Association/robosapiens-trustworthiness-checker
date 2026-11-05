@@ -8,6 +8,7 @@ use super::lower::*;
 use crate::core::Semantics;
 use crate::lang::core::DepGraph as NamedDependencyGraph;
 use crate::lang::dsrv::ElaboratedDsrvSpecification;
+use crate::lang::dsrv::ast::CheckedExpr;
 
 impl DataflowProgram {
     /// Compile an elaborated specification into an immutable monitor definition,
@@ -24,7 +25,7 @@ impl DataflowProgram {
     /// `semantics`: the library's `Semantics::Untimed` reference strategy does
     /// not consult the types; every other strategy does, as
     /// [`Self::compile_checked`]. The CLI name `untimed` selects
-    /// `Semantics::GradualTypedUntimed`.
+    /// `Semantics::TypedUntimed`.
     pub fn compile_with_semantics(
         specification: ElaboratedDsrvSpecification,
         semantics: Semantics,
@@ -39,13 +40,10 @@ impl DataflowProgram {
         }
     }
 
-    fn compile_specification<S>(
-        specification: S,
-        build_graph: impl Fn(S::Expr) -> UnboundEvaluationGraph,
-    ) -> Result<Self, DataflowCompilationError>
-    where
-        S: Specification,
-    {
+    fn compile_specification(
+        specification: ElaboratedDsrvSpecification,
+        build_graph: impl Fn(CheckedExpr) -> UnboundEvaluationGraph,
+    ) -> Result<Self, DataflowCompilationError> {
         crate::core::ensure_runtime_support(
             &specification,
             crate::dataflow::RUNTIME_CAPABILITIES,
@@ -54,7 +52,7 @@ impl DataflowProgram {
         let input_variables = specification.input_vars_in_order();
         let output_variables = specification.output_vars_in_order();
         let stream_variables = specification.stream_vars_in_order();
-        let type_annotations = specification.type_annotations();
+        let type_annotations = specification.type_annotations().clone();
         let dataflow = LoweredDataflow::build(&input_variables, &stream_variables, |variable| {
             specification.var_expr(variable).map(&build_graph)
         })?;

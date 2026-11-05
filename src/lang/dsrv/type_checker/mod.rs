@@ -1,46 +1,100 @@
-//! Type checking for DSRV specifications.
+//! Deterministic checking with concrete stream types.
 //!
-//! Inferred node types are stored as immutable metadata indexed by expression ID.
-//!
-//! - `checker`: expression checking, and the strict driver, which requires
-//!   type annotations on all variables
-//! - `gradual`: the gradual driver, which infers types for unannotated
-//!   variables and falls back to `Any`
-//! - `types`: the checker type representation and node annotations
-//! - `warnings`: the warnings one checking attempt collects
-//! - `validation`: AST validation and type extraction for runtime values
-//!
-//! Every driver returns a
-//! [`SemanticAnalysisReport`](crate::lang::dsrv::diagnostics::SemanticAnalysisReport);
-//! the diagnostics themselves live in [`diagnostics`](crate::lang::dsrv::diagnostics).
-//!
-//! Checking accepts an `Any` where a concrete type is needed, and records
-//! that the value must be checked when it runs. The pass whose types are
-//! kept (strict checking, or gradual checking's final pass) records, in
-//! `RuntimeChecks`, each node of type `Any` it accepted at a concrete type:
-//! where a value is checked against an expectation, where a binary operator
-//! settles its operands' type, and where a call's argument meets its
-//! parameter. One helper in the checker does all recording, and a
-//! speculative check that fails drops what it recorded. Elaboration wraps
-//! each recorded node in a run-time check, and runtimes stop at the first
-//! data value that fails one with a [`RuntimeTypeError`]. Only types whose
-//! values can be checked are recorded: scalars, and lists, maps, tuples and
-//! structs of them or of `Any`.
-
-mod checker;
-mod gradual;
+//! Each expression is visited once with the concrete information available at
+//! that point. Declared generic parameters are substituted from required results
+//! and source-order arguments. Empty shapes and lambda inputs need concrete
+//! context; differing contributions need an explicit common type.
+//! Checking leaves syntax unchanged and publishes only complete node annotations.
+mod checking;
+mod diagnostics;
+mod instantiation;
+mod relations;
+mod rules;
+mod runtime_checks;
+mod specification;
+#[cfg(test)]
+mod tests;
+mod type_contexts;
 mod types;
-mod validation;
-mod warnings;
+mod typing_support;
 
-#[cfg(test)]
-mod property_tests;
-
-pub use checker::type_check_expression;
+use self::{checking::check, diagnostics::WarningCollector, type_contexts::TypeContext};
+use super::{
+    ast::{AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr},
+    diagnostics::{SemanticAnalysisReport, SemanticResult},
+    source_map::SourceArchive,
+    validation::validate_specification,
+};
+use crate::core::StreamType;
+use contiguous_tree::TreeCursorExt;
+pub use runtime_checks::check_value_stream_type;
 pub use types::*;
-pub use validation::*;
 
-#[cfg(test)]
-pub(crate) use checker::check_expression;
-pub(crate) use checker::{check_and_elaborate_expression, type_check};
-pub(crate) use gradual::type_check_gradual;
+pub(crate) fn type_check(
+    mut spec: DsrvSpecification,
+) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
+    let mut warnings = WarningCollector::default();
+    let sources = AstShared::clone(spec.sources());
+    let result = (|| {
+        validate_specification(&spec)?;
+        let mut environment = spec.type_annotations().clone();
+        let types = specification::check_streams(&spec, &mut environment, &mut warnings)?;
+        spec.type_annotations = environment;
+        Ok(CheckedDsrvSpecification::new(spec, types))
+    })();
+    warnings.finish_report(result, Some(&sources))
+}
+pub(crate) fn check_expression(
+    expr: Expr,
+    expected: &StreamType,
+    environment: &AstShared<StreamTypes>,
+    sources: Option<&SourceArchive>,
+) -> SemanticAnalysisReport<CheckedExpr> {
+    let mut warnings = WarningCollector::default();
+    let result = check_expression_with(expr, expected, environment, &mut warnings);
+    warnings.finish_report(result, sources)
+}
+pub(crate) fn check_and_elaborate_expression(
+    expr: Expr,
+    expected: &StreamType,
+    environment: &AstShared<StreamTypes>,
+    sources: Option<&SourceArchive>,
+) -> SemanticAnalysisReport<CheckedExpr> {
+    check_expression(expr, expected, environment, sources).map_checked(CheckedExpr::elaborate)
+}
+fn check_expression_with(
+    expr: Expr,
+    expected: &StreamType,
+    environment: &AstShared<StreamTypes>,
+    warnings: &mut WarningCollector,
+) -> SemanticResult<CheckedExpr> {
+    super::validation::validate_standalone_expression(
+        expr.as_ref(),
+        &environment.keys().cloned().collect(),
+    )?;
+    let mut context = TypeContext::new(environment, warnings);
+    check(expr.as_ref(), Some(expected), &mut context).map_err(|error| vec![error])?;
+    let mut annotations = expr.annotations_builder();
+    for node in expr.as_ref().postorder() {
+        annotations
+            .insert(node, context.expr_types[&node.id()].clone())
+            .expect("checked node belongs to tree");
+    }
+    let types = annotations
+        .finish()
+        .expect("successful checking records every node");
+    Ok(CheckedExpr::new(expr, types, AstShared::clone(environment)))
+}
+/// Check an expression against a known concrete type and stream environment.
+pub fn type_check_expression(
+    expr: &Expr,
+    expected: &StreamType,
+    environment: &StreamTypes,
+) -> SemanticAnalysisReport<CheckedExpr> {
+    check_expression(
+        expr.clone(),
+        expected,
+        &AstShared::new(environment.clone()),
+        None,
+    )
+}

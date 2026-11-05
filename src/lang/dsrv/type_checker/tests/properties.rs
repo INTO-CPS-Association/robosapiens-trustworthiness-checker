@@ -1,13 +1,12 @@
-use super::*;
+use super::super::*;
 use crate::core::BinaryOperator;
 use crate::core::{StreamType, Value};
 use crate::dataflow::DataflowMonitor;
 use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
 use crate::lang::dsrv::diagnostics::SemanticError;
 use crate::lang::dsrv::test_support::arb_dsrv_spec;
-use crate::lang::dsrv::test_support::{type_check, type_check_gradual};
+use crate::lang::dsrv::test_support::type_check;
 use crate::{DsrvSpecification, VarName};
-use ::core::cfg_select;
 use ecow::eco_vec;
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,7 +16,7 @@ struct TypeDirectedCase {
     expr: Expr,
     expected: StreamType,
     inputs: BTreeMap<VarName, StreamType>,
-    may_widen_without_annotation: bool,
+    requires_collection_context: bool,
 }
 
 fn scalar_case(
@@ -30,7 +29,7 @@ fn scalar_case(
             expr,
             expected: expected.clone(),
             inputs: BTreeMap::from([(VarName::new(input.0), input.1.clone())]),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         })
         .boxed()
 }
@@ -117,7 +116,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     );
     let lists = prop::collection::vec(any::<i16>(), 0..8)
         .prop_map(|values| TypeDirectedCase {
-            may_widen_without_annotation: values.is_empty(),
+            requires_collection_context: values.is_empty(),
             expr: Expr::List(
                 values
                     .into_iter()
@@ -131,7 +130,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         .boxed();
     let maps = prop::collection::btree_map("[a-z]{1,3}", any::<bool>(), 0..8)
         .prop_map(|values| TypeDirectedCase {
-            may_widen_without_annotation: values.is_empty(),
+            requires_collection_context: values.is_empty(),
             expr: Expr::Map(
                 values
                     .into_iter()
@@ -156,7 +155,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
                 StreamType::Str,
             ]),
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         })
         .boxed();
     let structs = (any::<i16>(), any::<bool>())
@@ -174,7 +173,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
                 false,
             ),
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         })
         .boxed();
     let functions = any::<i16>()
@@ -192,14 +191,14 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             .into(),
             expected: StreamType::Int,
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         })
         .boxed();
     let unit = Just(TypeDirectedCase {
         expr: Expr::Val(()).into(),
         expected: StreamType::Unit,
         inputs: BTreeMap::new(),
-        may_widen_without_annotation: false,
+        requires_collection_context: false,
     })
     .boxed();
     let powers = prop_oneof![
@@ -212,7 +211,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             .into(),
             expected: StreamType::Int,
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         }),
         (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
             expr: Expr::BinOp(
@@ -223,7 +222,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             .into(),
             expected: StreamType::Float,
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         }),
         (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
             expr: Expr::BinOp(
@@ -234,7 +233,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             .into(),
             expected: StreamType::Float,
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         }),
         (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
             expr: Expr::BinOp(
@@ -245,7 +244,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             .into(),
             expected: StreamType::Float,
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         }),
     ]
     .boxed();
@@ -259,7 +258,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             .into(),
             expected: StreamType::Bool,
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         }),
         (any::<bool>(), any::<bool>()).prop_map(|(left, right)| TypeDirectedCase {
             expr: Expr::BinOp(
@@ -270,7 +269,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             .into(),
             expected: StreamType::Bool,
             inputs: BTreeMap::new(),
-            may_widen_without_annotation: false,
+            requires_collection_context: false,
         }),
     ]
     .boxed();
@@ -324,245 +323,114 @@ fn sample_value(typ: &StreamType) -> Value {
     }
 }
 
-/// Two programs of different types combined by a merge: the result may be
-/// either of them, so its type is a join of theirs.
-#[derive(Clone, Debug)]
-struct MergeCase {
-    expr: Expr,
-    inputs: BTreeMap<VarName, StreamType>,
-    /// Inputs given no annotation, so that gradual checking types them `Any`.
-    unannotated: BTreeSet<VarName>,
+/// Reading the type on every node detects missing checked annotations in
+/// interiors as well as at roots, before and after syntax elaboration.
+fn assert_complete_types(checked: &crate::CheckedDsrvSpecification) {
+    use contiguous_tree::TreeCursorExt;
+    for name in checked.stream_vars() {
+        let expression = checked.var_expr_ref(name).expect("checked stream");
+        assert!(expression.postorder().count() > 0);
+        for node in expression.postorder() {
+            let _concrete: StreamType = node.typ().clone();
+        }
+    }
 }
 
-fn arb_merge_case() -> impl Strategy<Value = MergeCase> {
-    let guard = || Box::new(Expr::Var(VarName::new("guard")));
-    (
-        arb_type_directed_case(),
-        arb_type_directed_case(),
-        any::<bool>(),
-        0..3u8,
-    )
-        .prop_map(move |(first, second, dynamic_second, shape)| {
-            let mut inputs = first.inputs.clone();
-            inputs.extend(second.inputs.clone());
-            inputs.insert(VarName::new("guard"), StreamType::Bool);
-            let mut unannotated = BTreeSet::new();
-            // An operand read from an input with no annotation.
-            let second_expr = if dynamic_second {
-                let dynamic = VarName::new("dynamic");
-                unannotated.insert(dynamic.clone());
-                Expr::Var(dynamic).into()
-            } else {
-                second.expr.clone()
-            };
-            let (left, right) = (Box::new(first.expr), Box::new(second_expr));
-            let expr = match shape {
-                0 => Expr::If(guard(), left, right).into(),
-                1 => Expr::Default(left, right).into(),
-                _ => Expr::If(guard(), right, left).into(),
-            };
-            MergeCase {
-                expr,
-                inputs,
-                unannotated,
-            }
-        })
+fn matching_merge(case: &TypeDirectedCase, shape: u8) -> DsrvSpecification {
+    let mut case = case.clone();
+    let first = Box::new(case.expr.clone());
+    let second = Box::new(case.expr.clone());
+    case.expr = match shape % 2 {
+        0 => Expr::If(Box::new(Expr::Val(true)), first, second).into(),
+        _ => Expr::Default(first, second).into(),
+    };
+    specification(&case, false)
 }
-
-fn merge_specification(case: &MergeCase) -> DsrvSpecification {
-    let output = VarName::new("result");
-    let mut inputs: BTreeSet<VarName> = case.inputs.keys().cloned().collect();
-    inputs.extend(case.unannotated.iter().cloned());
-    DsrvSpecification::new(
-        inputs,
-        BTreeSet::from([output.clone()]),
-        BTreeMap::from([(output, case.expr.clone())]),
-        case.inputs.clone(),
-        Vec::new(),
-    )
-}
-
-/// Scalars, `Any`, the placeholders, and lists and maps of them.
-fn arb_tc_type() -> impl Strategy<Value = TCType> {
-    prop_oneof![
-        Just(TCType::Int),
-        Just(TCType::Float),
-        Just(TCType::Bool),
-        Just(TCType::Str),
-        Just(TCType::Unit),
-        Just(TCType::Any),
-        Just(TCType::Unknown),
-        Just(TCType::EmptyList),
-        Just(TCType::EmptyMap),
-    ]
-    .prop_recursive(2, 6, 2, |inner| {
-        prop_oneof![
-            inner.clone().prop_map(TCType::list),
-            inner.prop_map(TCType::map),
-        ]
-    })
-}
-
-const TYPECHECK_PROPTEST_CASES: u32 = cfg_select! {
-    feature = "extended-proptests" => 10_000,
-    _ => 256,
-};
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(TYPECHECK_PROPTEST_CASES))]
+    #![proptest_config(super::property_config())]
 
     #[test]
-    fn join_is_idempotent_and_commutative(a in arb_tc_type(), b in arb_tc_type()) {
-        prop_assert_eq!(super::checker::join(&a, &a), a.clone());
-        prop_assert_eq!(super::checker::join(&a, &b), super::checker::join(&b, &a));
-    }
-
-    #[test]
-    fn join_with_any_is_any(a in arb_tc_type()) {
-        prop_assert_eq!(super::checker::join(&a, &TCType::Any), TCType::Any);
-        prop_assert_eq!(super::checker::join(&TCType::Any, &a), TCType::Any);
-    }
-
-    /// Either side may be used where the join is expected, which is what
-    /// makes it a type for a stream that carries either.
-    #[test]
-    fn join_is_an_upper_bound_under_unify(a in arb_tc_type(), b in arb_tc_type()) {
-        let joined = super::checker::join(&a, &b);
-        prop_assert!(super::checker::unify(&a, &joined).is_some(), "{a} against {joined}");
-        prop_assert!(super::checker::unify(&b, &joined).is_some(), "{b} against {joined}");
-    }
-
-    /// Gradual checking is inference followed by strict checking: annotate
-    /// every variable with the type gradual checking inferred, and strict
-    /// checking must accept the result, giving the output the same type.
-    #[test]
-    fn gradual_acceptance_is_inference_followed_by_strict_checking(case in arb_merge_case()) {
-        let spec = merge_specification(&case);
-        let (gradual, _warnings) = super::gradual::type_check_gradual(spec.clone()).into_parts();
-        // Whether gradual checking accepts is not the property's concern.
-        let Ok(gradual) = gradual else {
-            return Ok(());
-        };
-        let mut annotated = spec;
-        annotated.type_annotations = gradual.type_annotations().clone();
-        let (strict, _warnings) = super::type_check(annotated).into_parts();
-        let strict = match strict {
-            Ok(strict) => strict,
-            Err(errors) => {
-                return Err(TestCaseError::fail(format!(
-                    "gradual checking inferred {:?} but strict checking rejects it: {errors:?}",
-                    gradual.type_annotations()
-                )));
-            }
-        };
-        let output = VarName::new("result");
-        prop_assert_eq!(
-            strict.var_expr_ref(&output).unwrap().typ(),
-            gradual.var_expr_ref(&output).unwrap().typ(),
-        );
-    }
-
-    #[test]
-    fn strict_and_gradual_accept_type_directed_programs(case in arb_type_directed_case()) {
-        let spec = specification(&case, true);
-        let strict = type_check(spec.clone()).expect("type-directed strict program must type check");
-        let gradual = type_check_gradual(spec).expect("type-directed gradual program must type check");
-        let output = VarName::new("result");
-        let expected = TCType::from_stream_type(&case.expected);
-        let output_expr = strict.var_expr_ref(&output).unwrap();
-        prop_assert_eq!(output_expr.typ(), &expected);
-        let gradual_output = gradual.var_expr_ref(&output).unwrap();
-        prop_assert_eq!(gradual_output.typ(), &expected);
-    }
-
-    #[test]
-    fn gradual_infers_unannotated_type_directed_programs(case in arb_type_directed_case()) {
-        let typed = type_check_gradual(specification(&case, false))
-            .expect("gradual checker must infer a type-directed expression");
-        let result = typed.var_expr_ref(&VarName::new("result")).unwrap();
-        let actual = result.typ().clone();
-        if !case.may_widen_without_annotation {
-            prop_assert_eq!(actual, TCType::from_stream_type(&case.expected));
-        }
-    }
-
-    #[test]
-    fn strict_requires_output_annotations(case in arb_type_directed_case()) {
-        let errors = type_check(specification(&case, false))
-            .expect_err("strict checker must reject a missing output annotation");
-        prop_assert!(errors.iter().any(|error| matches!(error, SemanticError::MissingTypeAnnotation(_, _, _))));
-    }
-
-    #[test]
-    fn incompatible_annotations_are_rejected_by_both_drivers(case in arb_type_directed_case()) {
-        let mut spec = specification(&case, true);
-        spec.type_annotations.insert(VarName::new("result"), incompatible_type(&case.expected));
-        let strict = type_check(spec.clone()).expect_err("strict checker must reject contradiction");
-        let gradual = type_check_gradual(spec).expect_err("gradual checker must reject contradiction");
-        for errors in [strict, gradual] {
-            prop_assert!(!errors.is_empty());
-        }
-    }
-
-    #[test]
-    fn gradual_inference_reaches_a_fixed_point_across_forward_dependencies(
-        case in arb_type_directed_case()
+    fn exported_inferred_annotations_recheck_matching_merges(
+        case in arb_type_directed_case().prop_filter("inferred interiors have concrete shapes", |case| !case.requires_collection_context),
+        shape in any::<u8>()
     ) {
-        let source = VarName::new("z_source");
-        let consumer = VarName::new("a_consumer");
-        let spec = DsrvSpecification::new(
-            case.inputs.keys().cloned().collect(),
-            BTreeSet::from([source.clone(), consumer.clone()]),
-            BTreeMap::from([
-                (consumer.clone(), Expr::Var(source.clone()).into()),
-                (source.clone(), case.expr.clone()),
-            ]),
-            case.inputs.clone(),
-            Vec::new(),
-        );
-        let typed = type_check_gradual(spec)
-            .expect("gradual inference must resolve a forward dependency chain");
-        let source_type = typed.var_expr_ref(&source).unwrap().typ().clone();
-        let consumer_type = typed.var_expr_ref(&consumer).unwrap().typ().clone();
-        prop_assert_eq!(consumer_type, source_type.clone());
-        if !case.may_widen_without_annotation {
-            prop_assert_eq!(source_type, TCType::from_stream_type(&case.expected));
+        let spec=matching_merge(&case,shape);
+        let inferred=type_check(spec.clone()).expect("matching concrete contributions infer");
+        assert_complete_types(&inferred);
+        let mut annotated=spec;
+        annotated.type_annotations=inferred.type_annotations().clone();
+        let rechecked=type_check(annotated).expect("exported annotations agree");
+        let output=VarName::new("result");
+        prop_assert_eq!(inferred.var_expr_ref(&output).unwrap().typ(),rechecked.var_expr_ref(&output).unwrap().typ());
+        prop_assert_eq!(inferred.var_expr_ref(&output).unwrap().typ(),&case.expected);
+    }
+
+    #[test]
+    fn contextual_type_directed_programs_have_complete_concrete_trees(case in arb_type_directed_case()) {
+        let checked=type_check(specification(&case,true)).expect("concrete context checks");
+        assert_complete_types(&checked);
+        let output=VarName::new("result");
+        prop_assert_eq!(checked.var_expr_ref(&output).unwrap().typ(),&case.expected);
+        let elaborated=checked.elaborate();
+        assert_complete_types(elaborated.checked());
+        prop_assert_eq!(elaborated.checked().var_expr_ref(&output).unwrap().typ(),&case.expected);
+    }
+
+    #[test]
+    fn inferred_programs_match_contextual_types_or_request_collection_annotations(case in arb_type_directed_case()) {
+        let result=type_check(specification(&case,false));
+        if case.requires_collection_context {
+            let errors=result.expect_err("empty interiors need annotation");
+            prop_assert!(errors.iter().any(|e| matches!(e,SemanticError::UnresolvedType(_))));
+        } else {
+            let checked=result.expect("known children determine the root");
+            prop_assert_eq!(checked.var_expr_ref(&VarName::new("result")).unwrap().typ(),&case.expected);
+            assert_complete_types(&checked);
         }
     }
 
     #[test]
-    fn accepted_typed_programs_produce_values_of_the_declared_type(
-        case in arb_type_directed_case()
-    ) {
-        let typed = type_check(specification(&case, true))
-            .expect("type-directed program must pass strict checking");
-        let mut monitor = DataflowMonitor::compile_checked(typed.elaborate())
-            .expect("type-directed program must compile to dataflow");
-        let input = monitor
-            .input_vars()
-            .iter()
-            .map(|name| sample_value(&case.inputs[name]))
-            .collect::<Vec<_>>();
-        let mut output = vec![Value::NoVal; monitor.output_vars().len()];
-        monitor.evaluate(&input, &mut output)
-            .expect("well-typed generated expression must evaluate");
-        prop_assert_eq!(output.len(), 1);
-        prop_assert!(
-            check_value_stream_type(&case.expected, &output[0]).is_ok(),
-            "output {:?} did not conform to {}",
-            output[0],
-            case.expected,
-        );
-    }
-
-    // Totality is about not panicking, so a generated spec may warn.
-    #[test]
-    fn strict_typechecking_is_total(spec in arb_dsrv_spec()) {
-        let _ = super::type_check(spec).into_parts();
+    fn incompatible_annotations_are_rejected(case in arb_type_directed_case()) {
+        let mut spec=specification(&case,true);
+        spec.type_annotations.insert(VarName::new("result"),incompatible_type(&case.expected));
+        prop_assert!(!type_check(spec).expect_err("incompatible annotation").is_empty());
     }
 
     #[test]
-    fn gradual_typechecking_is_total(spec in arb_dsrv_spec()) {
-        let _ = super::gradual::type_check_gradual(spec).into_parts();
+    fn incompatible_concrete_merge_shapes_are_refused(integer in any::<i16>(),boolean in any::<bool>(),reverse in any::<bool>()) {
+        let (a,b)=if reverse {(format!("{boolean}"),format!("{integer}"))}else{(format!("{integer}"),format!("{boolean}"))};
+        let source=format!("out result=if true then {a} else {b}");
+        let errors=type_check(source.parse().unwrap()).expect_err("different concrete shapes need an explicit compatible target");
+        prop_assert!(errors.iter().any(|e|matches!(e,SemanticError::UnresolvedType(error) if error.message().contains("different concrete types"))));
+    }
+
+    #[test]
+    fn dependency_order_preserves_acyclic_inference(case in arb_type_directed_case()) {
+        let source=VarName::new("z_source");
+        let consumer=VarName::new("a_consumer");
+        let mut annotations=case.inputs.clone();
+        // Empty collections still have positive coverage under their explicit context.
+        if case.requires_collection_context { annotations.insert(source.clone(),case.expected.clone()); }
+        let spec=DsrvSpecification::new(case.inputs.keys().cloned().collect(),BTreeSet::from([source.clone(),consumer.clone()]),BTreeMap::from([(consumer.clone(),Expr::Var(source.clone()).into()),(source.clone(),case.expr.clone())]),annotations,Vec::new());
+        let checked=type_check(spec).expect("dependencies are checked before their users");
+        prop_assert_eq!(checked.var_expr_ref(&source).unwrap().typ(),&case.expected);
+        prop_assert_eq!(checked.var_expr_ref(&consumer).unwrap().typ(),&case.expected);
+    }
+
+    #[test]
+    fn accepted_typed_programs_produce_values_of_the_declared_type(case in arb_type_directed_case()) {
+        let checked=type_check(specification(&case,true)).expect("type-directed program checks");
+        let mut monitor=DataflowMonitor::compile_checked(checked.elaborate()).expect("checked program compiles");
+        let input=monitor.input_vars().iter().map(|name|sample_value(&case.inputs[name])).collect::<Vec<_>>();
+        let mut output=vec![Value::NoVal;monitor.output_vars().len()];
+        monitor.evaluate(&input,&mut output).expect("well-typed expression evaluates");
+        prop_assert_eq!(output.len(),1);
+        prop_assert!(check_value_stream_type(&case.expected,&output[0]).is_ok(),"output {:?} did not conform to {}",output[0],case.expected);
+    }
+
+    #[test]
+    fn concrete_typechecking_is_total(spec in arb_dsrv_spec()) {
+        let _=super::super::type_check(spec).into_parts();
     }
 }

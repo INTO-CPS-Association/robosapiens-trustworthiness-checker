@@ -46,6 +46,31 @@ impl MatchPattern {
         }
     }
 
+    /// The tags this pattern matches whatever their payload holds, which is
+    /// what lets a `match` on a union go without a catch-all arm.
+    pub fn covered_tags(&self) -> Vec<&str> {
+        match &self.kind {
+            PatternKind::Tag { tag, payload } => payload
+                .as_ref()
+                .is_none_or(|payload| payload.is_irrefutable())
+                .then_some(tag.as_str())
+                .into_iter()
+                .collect(),
+            PatternKind::As(_, inner) => inner.covered_tags(),
+            PatternKind::Or(alternatives) => alternatives
+                .iter()
+                .flat_map(MatchPattern::covered_tags)
+                .collect(),
+            PatternKind::Wildcard
+            | PatternKind::Bind(_)
+            | PatternKind::Tuple(_)
+            | PatternKind::Struct { .. }
+            | PatternKind::List(_)
+            | PatternKind::Literal(_)
+            | PatternKind::Range { .. } => Vec::new(),
+        }
+    }
+
     /// Every name this pattern binds, in source order. An or-pattern binds
     /// the names of its first alternative; checking requires the rest to
     /// agree.
@@ -576,6 +601,25 @@ mod tests {
             }),
             ArmSelection::Unmatched
         );
+    }
+
+    #[test]
+    fn covered_tags_look_through_or_and_as_patterns() {
+        let int_literal = pattern(PatternKind::Literal(SyntaxLiteral::Int(1)));
+        let or = |alternatives| pattern(PatternKind::Or(alternatives));
+        let nested = or(eco_vec![
+            or(eco_vec![
+                tag("Red", None),
+                tag("Amber", Some(int_literal.clone()))
+            ]),
+            pattern(PatternKind::As(
+                VarName::from("g"),
+                Box::new(or(eco_vec![tag("Green", Some(wildcard()))])),
+            )),
+        ]);
+        assert_eq!(nested.covered_tags(), ["Red", "Green"]);
+        assert!(int_literal.covered_tags().is_empty());
+        assert!(wildcard().covered_tags().is_empty());
     }
 
     // R9.10: which patterns match everything is what makes a later arm

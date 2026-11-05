@@ -37,8 +37,7 @@ checker.provide_inputs({"velocity": 4.0, "emergency_stop": False})
 ```
 
 The model is parsed, then semantically checked, before any runtime is built.
-Typed semantics (`"typed-untimed"`, the default) checks strictly; the gradual,
-untimed and causal semantics check gradually. The warnings that checking
+Inputs require type annotations. The warnings that checking
 proves are kept on the runtime as an immutable tuple of `SemanticWarning`
 records, in report order:
 

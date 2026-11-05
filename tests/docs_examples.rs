@@ -15,7 +15,7 @@
 // ANCHOR: monitor_evaluate
 fn evaluate_two_ticks() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::DataflowMonitor;
-    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, Value, VarName};
 
     let source = "in x: Int\n\
         out alert: Bool\n\
@@ -24,8 +24,7 @@ fn evaluate_two_ticks() -> anyhow::Result<()> {
         alert = total > 20\n\
         total = default(total[1], 0) + scaled\n\
         scaled = x * 2";
-    let (spec, warnings) =
-        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    let (spec, warnings) = ElaboratedDsrvSpecification::parse(source)?.into_parts();
     assert!(warnings.is_empty(), "{warnings:?}");
     let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let mut monitor = DataflowMonitor::compile_checked(spec)?;
@@ -52,13 +51,12 @@ fn evaluate_two_ticks() -> anyhow::Result<()> {
 // ANCHOR: dataflow_program_lifecycle
 fn reuse_a_compiled_program_for_independent_traces() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::{DataflowMonitor, DataflowProgram};
-    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, Value};
 
     let source = "in x: Int\n\
         out total: Int\n\
         total = default(total[1], 0) + x";
-    let (spec, warnings) =
-        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    let (spec, warnings) = ElaboratedDsrvSpecification::parse(source)?.into_parts();
     assert!(warnings.is_empty(), "{warnings:?}");
     let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let program = DataflowProgram::compile_checked(spec)?;
@@ -329,7 +327,7 @@ fn write_one_output_row() -> anyhow::Result<()> {
 // ANCHOR: dsrv_operator_syntax
 fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::DataflowMonitor;
-    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, Value, VarName};
 
     let source = "in base: Int\n\
         in exponent: Int\n\
@@ -339,8 +337,7 @@ fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
         different = base != exponent\n\
         signed_power = (-base) ** exponent\n\
         both_positive = base > 0 and exponent > 0";
-    let (spec, warnings) =
-        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    let (spec, warnings) = ElaboratedDsrvSpecification::parse(source)?.into_parts();
     assert!(warnings.is_empty(), "{warnings:?}");
     let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let mut monitor = DataflowMonitor::compile_checked(spec)?;
@@ -365,7 +362,7 @@ fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
 fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
     use trustworthiness_checker::lang::dsrv::ast::{ExprView, SyntaxLiteral};
     use trustworthiness_checker::lang::dsrv::parser::parse_expr;
-    use trustworthiness_checker::{CheckedDsrvSpecification, TypeCheckOptions, Value};
+    use trustworthiness_checker::{CheckedDsrvSpecification, Value};
 
     let literals = [
         ("42", Value::Int(42)),
@@ -391,7 +388,7 @@ fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
 
     for literal in ["1e2.3", "1.2e3.4"] {
         let source = format!("out result: Float\nresult = {literal}");
-        let rejected = CheckedDsrvSpecification::parse_with(&source, TypeCheckOptions::STRICT)
+        let rejected = CheckedDsrvSpecification::parse(&source)
             .map_or(true, |report| report.result().is_err());
         assert!(
             rejected,
@@ -405,15 +402,14 @@ fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
 // ANCHOR: dsrv_trailing_commas_and_list_get
 fn evaluate_trailing_commas_and_list_get() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::DataflowMonitor;
-    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, Value, VarName};
 
     let source = "in values: List<Int,>\n\
         out first: Int\n\
         out count: Int\n\
         first = List.get(values, 0,)\n\
         count = List.len(values,)";
-    let (spec, warnings) =
-        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    let (spec, warnings) = ElaboratedDsrvSpecification::parse(source)?.into_parts();
     assert!(warnings.is_empty(), "{warnings:?}");
     let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let mut monitor = DataflowMonitor::compile_checked(spec)?;
@@ -439,15 +435,14 @@ fn evaluate_trailing_commas_and_list_get() -> anyhow::Result<()> {
 // ANCHOR: dsrv_else_if_chain
 fn evaluate_else_if_chain() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::DataflowMonitor;
-    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, Value, VarName};
 
     let source = "in temperature: Int\n\
         out level: Int\n\
         level = if temperature > 90 then 2\n\
                 else if temperature > 70 then 1\n\
                 else 0";
-    let (spec, warnings) =
-        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    let (spec, warnings) = ElaboratedDsrvSpecification::parse(source)?.into_parts();
     assert!(warnings.is_empty(), "{warnings:?}");
     let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let mut monitor = DataflowMonitor::compile_checked(spec)?;

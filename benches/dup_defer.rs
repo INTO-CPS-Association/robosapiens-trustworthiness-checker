@@ -28,7 +28,6 @@ use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
 use trustworthiness_checker::dsrv_fixtures::{WithoutWarnings, add_defer_input_stream};
 use trustworthiness_checker::io::map;
-use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 use trustworthiness_checker::{DsrvSpecification, InputStream, Value, VarName};
 
 #[cfg(feature = "jemalloc")]
@@ -70,10 +69,10 @@ fn from_elem(c: &mut Criterion) {
         .expect("add/defer benchmark specification should parse");
     let checked_spec = spec
         .clone()
-        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .check_and_elaborate()
         .without_warnings()
         .expect("add/defer benchmark specification should type check");
-    let dynamic_spec = "in x\nin y\nin e\nout z\nz = dynamic(e)"
+    let dynamic_spec = "in x: Int\nin y: Int\nin e: Str\nout z: Int\nz = dynamic(e: Int)"
         .parse::<DsrvSpecification>()
         .expect("dynamic benchmark specification should parse");
 
@@ -390,7 +389,7 @@ fn hard_dynamic_defer(c: &mut Criterion) {
         let spec = hard_dynamic_defer_spec(variant);
         let checked_spec = spec
             .clone()
-            .check_and_elaborate(TypeCheckOptions::GRADUAL)
+            .check_and_elaborate()
             .without_warnings()
             .expect("hard dynamic/defer benchmark specification should type check");
         for size in variant.sizes().iter().copied() {
@@ -485,11 +484,8 @@ fn hard_dynamic_defer(c: &mut Criterion) {
 
 fn dataflow_dynamic_phases(c: &mut Criterion) {
     fn compile(operator: &str) -> DataflowMonitor {
-        let source = format!("in x\nin y\nin e\nout z\nz = {operator}(e)");
-        let spec = trustworthiness_checker::dsrv_fixtures::elaborated_with(
-            &source,
-            TypeCheckOptions::GRADUAL,
-        );
+        let source = format!("in x: Int\nin y: Int\nin e: Str\nout z: Int\nz = {operator}(e: Int)");
+        let spec = trustworthiness_checker::dsrv_fixtures::elaborated(&source);
         DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap()
     }
 

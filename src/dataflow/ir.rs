@@ -6,8 +6,6 @@ pub(super) use crate::lang::dsrv::IfPolicy;
 use crate::lang::dsrv::ast::ReconfigurableExprScope;
 use crate::lang::dsrv::patterns::MatchPattern;
 use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
-use crate::lang::dsrv::source_map::SourceLocation;
-use crate::lang::dsrv::span::Span;
 
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
@@ -465,7 +463,6 @@ fn graph_has_reconfigurable_expressions(graph: &BoundEvaluationGraph) -> bool {
 fn graph_requires_fallible_evaluation(graph: &BoundEvaluationGraph) -> bool {
     graph.nodes.iter().any(|op| match op {
         BoundOp::Reconfigurable(_)
-        | BoundOp::Check { .. }
         | BoundOp::Apply { .. }
         | BoundOp::RecursiveCall { .. }
         | BoundOp::ListMap { .. }
@@ -653,15 +650,6 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
         }
         StreamOp::Ascribe { input, target } => {
             descriptor.push_str("ascribe:");
-            append_stream_type(descriptor, target);
-            descriptor.push('(');
-            append_ref_descriptor(descriptor, input, layout);
-            descriptor.push(')');
-        }
-        // Where a check was written changes only its message, so it is not
-        // part of what the program computes.
-        StreamOp::Check { input, target, .. } => {
-            descriptor.push_str("check:");
             append_stream_type(descriptor, target);
             descriptor.push('(');
             append_ref_descriptor(descriptor, input, layout);
@@ -865,7 +853,7 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             }
             if let Some(typing) = spec.site.typing() {
                 descriptor.push_str(",type=");
-                append_tc_type(descriptor, &typing.expected);
+                append_stream_type(descriptor, &typing.expected);
             }
             descriptor.push_str(",context=");
             descriptor.push_str(
@@ -1099,65 +1087,6 @@ fn append_value_descriptor(descriptor: &mut String, value: &Value) {
     }
 }
 
-fn append_tc_type(descriptor: &mut String, type_: &crate::lang::dsrv::type_checker::TCType) {
-    use crate::lang::dsrv::type_checker::TCType;
-    match type_ {
-        TCType::Int => descriptor.push_str("int"),
-        TCType::Float => descriptor.push_str("float"),
-        TCType::Str => descriptor.push_str("str"),
-        TCType::Bool => descriptor.push_str("bool"),
-        TCType::Unit => descriptor.push_str("unit"),
-        TCType::Map(value) => {
-            descriptor.push_str("map<");
-            append_tc_type(descriptor, value);
-            descriptor.push('>');
-        }
-        TCType::Expr(value) => {
-            descriptor.push_str("expr<");
-            append_tc_type(descriptor, value);
-            descriptor.push('>');
-        }
-        TCType::Tuple(values) => {
-            descriptor.push_str("tuple<");
-            for value in values {
-                append_tc_type(descriptor, value);
-                descriptor.push(',');
-            }
-            descriptor.push('>');
-        }
-        TCType::List(value) => {
-            descriptor.push_str("list<");
-            append_tc_type(descriptor, value);
-            descriptor.push('>');
-        }
-        TCType::Struct(fields, extra) => {
-            descriptor.push_str("struct<");
-            for (name, value) in fields {
-                append_identifier(descriptor, name.as_str());
-                descriptor.push(':');
-                append_tc_type(descriptor, value);
-                descriptor.push(',');
-            }
-            let _ = write!(descriptor, ";extra={extra}>");
-        }
-        TCType::Function(parameters, output) => {
-            descriptor.push_str("fn<");
-            for parameter in parameters {
-                append_tc_type(descriptor, parameter);
-                descriptor.push(',');
-            }
-            descriptor.push_str("->");
-            append_tc_type(descriptor, output);
-            descriptor.push('>');
-        }
-        TCType::EmptyList => descriptor.push_str("empty-list"),
-        TCType::EmptyMap => descriptor.push_str("empty-map"),
-        TCType::Any => descriptor.push_str("any"),
-        TCType::Union(schema) => append_union_descriptor(descriptor, schema, append_tc_type),
-        TCType::Unknown => descriptor.push_str("unknown"),
-    }
-}
-
 fn append_union_descriptor<T: Clone>(
     descriptor: &mut String,
     schema: &crate::core::ClosedUnion<T>,
@@ -1228,7 +1157,6 @@ pub(super) fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
             append_stream_type(descriptor, output);
             descriptor.push('>');
         }
-        StreamType::Any => descriptor.push_str("any"),
         StreamType::Union(schema) => {
             append_union_descriptor(descriptor, schema, append_stream_type)
         }
@@ -1261,15 +1189,6 @@ pub(super) enum StreamOp<E: GraphReference> {
     Ascribe {
         input: DataRef<E>,
         target: StreamType,
-    },
-    /// Pass `input` through, stopping the monitor at the first data value
-    /// that is not a `target`: a value checking typed `Any`, used where a
-    /// `target` is needed. `span` and `location` say where the use was written.
-    Check {
-        input: DataRef<E>,
-        target: StreamType,
-        span: Span,
-        location: SourceLocation,
     },
     Binary {
         op: BinaryOperator,
@@ -1420,7 +1339,7 @@ impl<E: GraphReference> StreamOp<E> {
     pub(super) fn for_each_operand(&self, mut visit: impl FnMut(&DataRef<E>)) {
         match self {
             StreamOp::Unary { arg, .. } => visit(arg),
-            StreamOp::Ascribe { input, .. } | StreamOp::Check { input, .. } => visit(input),
+            StreamOp::Ascribe { input, .. } => visit(input),
             StreamOp::Binary { lhs, rhs, .. }
             | StreamOp::Default {
                 input: lhs,

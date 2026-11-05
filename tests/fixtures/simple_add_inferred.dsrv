@@ -1,4 +1,4 @@
-in x
-in y
+in x: Int
+in y: Int
 out z
 z = x + y

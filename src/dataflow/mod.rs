@@ -141,7 +141,7 @@
 //! This executable version exercises compilation and the public monitor interface directly:
 //!
 //! ```
-//! use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+//! use trustworthiness_checker::{ElaboratedDsrvSpecification, Value, VarName};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
 //! let source = "in x: Int\n\
@@ -151,7 +151,7 @@
 //!     alert = total > 20\n\
 //!     total = default(total[1], 0) + scaled\n\
 //!     scaled = x * 2";
-//! let report = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL);
+//! let report = ElaboratedDsrvSpecification::parse(source);
 //! let (spec, warnings) = report.expect("valid DSRV syntax").into_parts();
 //! assert!(warnings.is_empty());
 //! let spec = spec.expect("valid DSRV specification");
@@ -543,13 +543,13 @@
 //! sees the same captured value:
 //!
 //! ```
-//! use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+//! use trustworthiness_checker::{ElaboratedDsrvSpecification, Value, VarName};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
 //! let source = "in bias: Int\nin n: Int\nout direct: Int\nout recursive: Int\n\
 //!     direct = (\\x: Int -> x + bias)(n)\n\
 //!     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)";
-//! let report = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL);
+//! let report = ElaboratedDsrvSpecification::parse(source);
 //! let (spec, warnings) = report.unwrap().into_parts();
 //! assert!(warnings.is_empty());
 //! let spec = spec.unwrap();

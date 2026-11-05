@@ -10,7 +10,7 @@ use trustworthiness_checker::VarName;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
-    ElaboratedDsrvSpecification, LocalStream, TypeCheckOptions, Value,
+    ElaboratedDsrvSpecification, LocalStream, Value,
     core::{OutputInterface, OutputWriter, Runtime},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
@@ -72,10 +72,7 @@ async fn channel_output(
 /// Every specification here is monitored in a distribution, so it is written
 /// in Distributed DSRV.
 fn parse_spec(source: &str) -> ElaboratedDsrvSpecification {
-    trustworthiness_checker::dsrv_fixtures::elaborated_with(
-        &format!("language distributed\n{source}"),
-        TypeCheckOptions::GRADUAL,
-    )
+    trustworthiness_checker::dsrv_fixtures::elaborated(&format!("language distributed\n{source}"))
 }
 
 // The in-process distributed runtime carries revised scalar
@@ -190,7 +187,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
         ]),
     };
 
-    let spec = "in x\n
+    let spec = "in x: Int\n
     out w\n
     out tuple_element\n
     out y\n
@@ -281,7 +278,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
         ]),
     };
 
-    let spec = "in x\n
+    let spec = "in x: Int\n
     out w\n
     out y\n
     out z\n
@@ -366,7 +363,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
         ]),
     };
 
-    let spec = "in x\n
+    let spec = "in x: Int\n
     out w\n
     out y\n
     out z\n
@@ -451,7 +448,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
         ]),
     };
 
-    let spec = "in x\n
+    let spec = "in x: Int\n
     out w\n
     out y\n
     out z\n
@@ -536,7 +533,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
         ]),
     };
 
-    let spec = "in x\n
+    let spec = "in x: Int\n
     out w\n
     out y\n
     out z\n

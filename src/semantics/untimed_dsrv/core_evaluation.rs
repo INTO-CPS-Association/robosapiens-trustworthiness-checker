@@ -34,13 +34,8 @@ pub(crate) fn evaluate<'a>(
                 BinaryOperator::Greater => mc::gt(left, right),
             }
         }
-        Cast(value, target) | Ascribe(value, target) => mc::cast(evaluate(value), target.clone()),
-        Check(value, target, location) => mc::check(
-            evaluate(value),
-            target.clone(),
-            node.span(),
-            location.clone(),
-        ),
+        Cast(value, target) => mc::cast(evaluate(value), target.clone()),
+        Ascribe(value, _) => mc::stream_lift_base(evaluate(value)),
         Not(value) => mc::not(evaluate(value)),
         Neg(value) => mc::neg(evaluate(value)),
         Update(current, update) => mc::update(evaluate(current), evaluate(update)),

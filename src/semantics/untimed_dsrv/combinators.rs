@@ -45,30 +45,18 @@ pub fn unary(operation: UnaryOperator, input: LocalStream<Value>) -> LocalStream
 }
 
 pub fn cast(input: LocalStream<Value>, target: crate::core::StreamType) -> LocalStream<Value> {
-    stream_lift1(
-        move |value| unwrap_value(value_operations::cast(value, &target)),
-        input,
-    )
-}
-
-/// Pass `input` through unchanged, stopping the monitor at the first data
-/// value that is not a `target`: a value checking typed `Any`, used where a
-/// `target` is needed. The untimed runtimes have no error path out of a
-/// stream, so the failure panics with the located message, as other failed
-/// evaluations do.
-pub fn check(
-    input: LocalStream<Value>,
-    target: crate::core::StreamType,
-    span: crate::lang::dsrv::span::Span,
-    location: crate::lang::dsrv::source_map::SourceLocation,
-) -> LocalStream<Value> {
-    Box::pin(input.map(move |value| {
-        if let Err(error) =
-            crate::lang::dsrv::type_checker::check_runtime_value(&value, &target, span, &location)
-        {
-            panic!("{error}");
-        }
-        value
+    if matches!(
+        target,
+        crate::core::StreamType::Float | crate::core::StreamType::Str
+    ) {
+        return stream_lift1(
+            move |value| unwrap_value(value_operations::cast(value, &target)),
+            input,
+        );
+    }
+    Box::pin(input.map(move |value| match PartialMarker::of(&value) {
+        Some(_) => value,
+        None => unwrap_value(value_operations::cast(value, &target)),
     }))
 }
 
@@ -620,6 +608,23 @@ pub fn abs(v: LocalStream<Value>) -> LocalStream<Value> {
 
 #[cfg(test)]
 mod combinator_tests {
+    fn int_source_site(names: &[&str]) -> RuntimeExpressionSite {
+        use crate::core::StreamType;
+        use crate::lang::dsrv::runtime_expression::RuntimeExpressionTyping;
+        RuntimeExpressionSite::new(
+            Default::default(),
+            Default::default(),
+            Some(RuntimeExpressionTyping {
+                environment: names
+                    .iter()
+                    .map(|name| (crate::VarName::new(*name), StreamType::Int))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+                    .into(),
+                expected: StreamType::Int,
+            }),
+        )
+    }
+
     use super::*;
     use crate::async_test;
     use crate::core::Value;
@@ -720,7 +725,7 @@ mod combinator_tests {
             e,
             ReconfigurableExprScope::Automatic,
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -739,7 +744,7 @@ mod combinator_tests {
             e,
             ReconfigurableExprScope::Automatic,
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -761,7 +766,7 @@ mod combinator_tests {
             e,
             ReconfigurableExprScope::Automatic,
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -784,7 +789,7 @@ mod combinator_tests {
             e,
             ReconfigurableExprScope::Automatic,
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -820,7 +825,7 @@ mod combinator_tests {
             e,
             ReconfigurableExprScope::Automatic,
             1,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -845,7 +850,7 @@ mod combinator_tests {
             e,
             eco_vec!["x".into()].into(),
             2,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         let _ = with_timeout(ctx.run(), 1, "ctx.run()")
             .await
@@ -869,7 +874,7 @@ mod combinator_tests {
             e,
             eco_vec!["x".into()].into(),
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -888,7 +893,7 @@ mod combinator_tests {
             e,
             eco_vec!["x".into()].into(),
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -912,7 +917,7 @@ mod combinator_tests {
             e,
             eco_vec!["x".into()].into(),
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -931,7 +936,7 @@ mod combinator_tests {
             e,
             eco_vec!["x".into()].into(),
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -975,7 +980,7 @@ mod combinator_tests {
             e,
             eco_vec!["x".into(), "y".into()].into(),
             10,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x", "y"]),
         );
         ctx.run().await;
         let res: Vec<Value> = with_timeout(res_stream.collect(), 10, "res_stream.collect")
@@ -1792,6 +1797,23 @@ mod combinator_tests {
 
 #[cfg(test)]
 mod noval_tests {
+    fn int_source_site(names: &[&str]) -> RuntimeExpressionSite {
+        use crate::core::StreamType;
+        use crate::lang::dsrv::runtime_expression::RuntimeExpressionTyping;
+        RuntimeExpressionSite::new(
+            Default::default(),
+            Default::default(),
+            Some(RuntimeExpressionTyping {
+                environment: names
+                    .iter()
+                    .map(|name| (crate::VarName::new(*name), StreamType::Int))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+                    .into(),
+                expected: StreamType::Int,
+            }),
+        )
+    }
+
     use std::rc::Rc;
 
     use super::*;
@@ -1817,7 +1839,7 @@ mod noval_tests {
             e,
             ReconfigurableExprScope::Automatic,
             1,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1836,7 +1858,7 @@ mod noval_tests {
             e,
             ReconfigurableExprScope::Automatic,
             1,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1870,7 +1892,7 @@ mod noval_tests {
             e,
             ReconfigurableExprScope::Automatic,
             1,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1917,7 +1939,7 @@ mod noval_tests {
             e,
             ReconfigurableExprScope::Automatic,
             1,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1943,7 +1965,7 @@ mod noval_tests {
             e,
             eco_vec!["x".into()].into(),
             1,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1962,7 +1984,7 @@ mod noval_tests {
             e,
             eco_vec!["x".into()].into(),
             1,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1996,7 +2018,7 @@ mod noval_tests {
             e,
             eco_vec!["x".into()].into(),
             1,
-            RuntimeExpressionSite::default(),
+            int_source_site(&["x"]),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;

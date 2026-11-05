@@ -6,8 +6,8 @@ use crate::dsrv_fixtures::WithoutWarnings;
 use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification};
 use crate::lang::dsrv::diagnostics::{SemanticError, TypeErrorKind};
 use crate::lang::dsrv::parser::{DsrvParseError, check_core_source, parse_str};
-use crate::lang::dsrv::pipeline::TypeCheckOptions;
-use crate::lang::dsrv::type_checker::TCType;
+
+use crate::core::StreamType;
 use crate::lang::dsrv::{Feature, LanguageError};
 
 use test_log::test;
@@ -26,14 +26,14 @@ fn parse(body: &str) -> DsrvSpecification {
 
 fn check(body: &str) -> CheckedDsrvSpecification {
     parse(body)
-        .check(TypeCheckOptions::GRADUAL)
+        .check()
         .without_warnings()
         .unwrap_or_else(|errors| panic!("{}: {errors:?}", specification(body)))
 }
 
 fn check_err(body: &str) -> Vec<SemanticError> {
     parse(body)
-        .check(TypeCheckOptions::GRADUAL)
+        .check()
         .without_warnings()
         .err()
         .unwrap_or_else(|| panic!("{}: expected checking to fail", specification(body)))
@@ -46,7 +46,7 @@ fn kind_of(errors: &[SemanticError]) -> &TypeErrorKind {
     }
 }
 
-fn type_of(checked: &CheckedDsrvSpecification, name: &str) -> TCType {
+fn type_of(checked: &CheckedDsrvSpecification, name: &str) -> StreamType {
     checked
         .var_expr_ref(&VarName::from(name))
         .unwrap_or_else(|| panic!("{name} is defined"))
@@ -157,6 +157,65 @@ fn a_match_covers_every_alternative() {
     }
 }
 
+// An or-pattern covers each tag its alternatives cover, however they are nested
+// or named.
+#[test]
+fn an_or_pattern_covers_the_alternatives_it_names() {
+    for body in [
+        "out y: Int\ny = match(state) { Moving(_) | Stopped -> 0, }\n",
+        "out y: Int\ny = match(state) { Stopped | Moving(_) -> 0, }\n",
+        "out y: Int\ny = match(state) { Moving(1 | _) | Stopped -> 0, }\n",
+        "out y: Int\ny = match(state) { Moving(1) | Moving(_) | Stopped -> 0, }\n",
+        "out y: Int\ny = match(state) { m @ Moving(_) -> 0, Stopped -> 1, }\n",
+        "out y: Int\ny = match(state) { Moving(_) -> 1, Stopped | Moving(_) -> 0, }\n",
+    ] {
+        check(body);
+    }
+}
+
+#[test]
+fn an_or_pattern_covering_only_some_tags_is_refused() {
+    let three_tags = |arms: &str| {
+        format!(
+            "{HEADER}type Light = Union<Red, Amber, Green>\nin l: Light\nout y: Int\n\
+             y = match(l) {{ {arms} }}\n"
+        )
+    };
+    let refusal = |source: &str| {
+        parse_str(source)
+            .unwrap_or_else(|error| panic!("{source}: {error}"))
+            .check()
+            .without_warnings()
+            .err()
+            .unwrap_or_else(|| panic!("{source}: expected checking to fail"))
+    };
+    let errors = refusal(&three_tags("Red | Amber -> 0,"));
+    assert_eq!(kind_of(&errors), &TypeErrorKind::MatchNotExhaustive);
+    assert!(
+        format!("{errors:?}").contains("no arm matches Green"),
+        "{errors:?}"
+    );
+    assert!(
+        parse_str(&three_tags("Red | Amber -> 0, Green | Red -> 1,"))
+            .unwrap()
+            .check()
+            .without_warnings()
+            .is_ok()
+    );
+
+    for body in [
+        "out y: Int\ny = match(state) { Moving(1) | Stopped -> 0, }\n",
+        "out y: Int\ny = match(state) { Moving(1 | 2) | Stopped -> 0, }\n",
+        "out y: Int\ny = match(state) { Moving(_) | Stopped if x > 0 -> 0, }\n",
+    ] {
+        assert_eq!(
+            kind_of(&check_err(body)),
+            &TypeErrorKind::MatchNotExhaustive,
+            "{body}"
+        );
+    }
+}
+
 // R12.6: each way an arm can disagree with the value or with its neighbours.
 #[test]
 fn arms_are_checked_against_the_value_and_each_other() {
@@ -205,6 +264,82 @@ fn a_range_pattern_covers_its_ends_as_written() {
             "in label: Str\nout y: Int\ny = match(label) { 1..3 -> 1, _ -> 0, }\n"
         )),
         &TypeErrorKind::PatternTypeMismatch
+    );
+}
+
+// A closed struct has all its fields, so a struct pattern that does not end in
+// `..` and leaves one out can never match it. The omitted fields are named.
+#[test]
+fn a_struct_pattern_that_omits_fields_of_a_closed_struct_is_refused() {
+    for (arm, omitted) in [
+        ("{ a: v }", "`b`"),
+        ("{ b: v }", "`a`"),
+        ("{ }", "`a`, `b`"),
+        ("{ a: 1 }", "`b`"),
+        ("{ a: v } | { b: v }", "`b`"),
+    ] {
+        for scrutinee in ["s", "t"] {
+            let errors = check_err(&format!(
+                "in s: Struct<a: Int, b: Int>\nin t: Struct<a: Int, b: Int>\nout y: Int\n\
+                 y = match({scrutinee}) {{ {arm} -> 1, _ -> 0, }}\n"
+            ));
+            assert_eq!(
+                kind_of(&errors),
+                &TypeErrorKind::PatternTypeMismatch,
+                "{arm}"
+            );
+            let SemanticError::TypeError(error) = &errors[0] else {
+                panic!("{arm}: {errors:?}");
+            };
+            assert!(
+                error.message().contains(&format!("leaves out {omitted}"))
+                    && error.message().contains("add `..`"),
+                "{arm}: {}",
+                error.message()
+            );
+            assert!(
+                error.span().is_some() && !error.location().is_unset(),
+                "{arm}"
+            );
+        }
+    }
+    let errors = check_err("in s: Struct<a: Int, b: Int>\nout y: Bool\ny = matches(s, { a: v })\n");
+    assert_eq!(kind_of(&errors), &TypeErrorKind::PatternTypeMismatch);
+}
+
+// Listing every field, or ending in `..`, describes a closed struct, and an
+// open struct type promises only the fields it lists.
+#[test]
+fn a_struct_pattern_that_covers_or_ignores_the_other_fields_is_accepted() {
+    for (struct_type, arm) in [
+        ("Struct<a: Int, b: Int>", "{ a: v, .. }"),
+        ("Struct<a: Int, b: Int>", "{ a: v, b: _ }"),
+        ("Struct<a: Int, b: Int>", "{ b: _, a: v }"),
+        ("Struct<a: Int, b: Int>", "{ .. }"),
+        ("Struct<a: Int, ...>", "{ a: v }"),
+        ("Struct<a: Int, ...>", "{ a: v, .. }"),
+        ("Struct<a: Int, b: Int, ...>", "{ a: v }"),
+        ("Map<Int>", "{ a: v }"),
+    ] {
+        check(&format!(
+            "in s: {struct_type}\nout y: Int\ny = match(s) {{ {arm} -> 1, _ -> 0, }}\n"
+        ));
+    }
+    // An open struct type does not list the field, so there is none to bind.
+    let errors = check_err(
+        "in s: Struct<a: Int, ...>\nout y: Int\ny = match(s) { { b: v } -> 1, _ -> 0, }\n",
+    );
+    assert_eq!(kind_of(&errors), &TypeErrorKind::StructUnknownField);
+}
+
+// The alternatives of an or-pattern must agree on their names at any scrutinee.
+#[test]
+fn an_or_pattern_on_a_list_must_bind_the_same_names() {
+    assert_eq!(
+        kind_of(&check_err(
+            "in v: List<Int>\nout y: Int\ny = match(v) { [a] | [b] -> 0, _ -> 0, }\n"
+        )),
+        &TypeErrorKind::OrPatternBindings
     );
 }
 
@@ -264,10 +399,16 @@ fn a_pattern_binding_cannot_be_indexed() {
 fn an_empty_list_arm_takes_the_element_type_of_the_other_arms() {
     let checked =
         check("out ys: List<Str>\nys = match(state) {\n  Stopped -> [\"a\"],\n  _ -> [],\n}\n");
-    assert_eq!(type_of(&checked, "ys"), TCType::list(TCType::Str));
+    assert_eq!(
+        type_of(&checked, "ys"),
+        StreamType::List(Box::new(StreamType::Str))
+    );
     let checked =
         check("out ys: List<Str>\nys = match(state) {\n  Moving(_) -> [],\n  _ -> [\"a\"],\n}\n");
-    assert_eq!(type_of(&checked, "ys"), TCType::list(TCType::Str));
+    assert_eq!(
+        type_of(&checked, "ys"),
+        StreamType::List(Box::new(StreamType::Str))
+    );
 }
 
 #[test]
@@ -279,16 +420,22 @@ fn an_empty_list_arm_of_a_def_takes_its_element_type_from_the_other_arms() {
     );
     let checked = parse_str(&source)
         .unwrap_or_else(|error| panic!("{source}: {error}"))
-        .check(TypeCheckOptions::GRADUAL)
+        .check()
         .without_warnings()
         .unwrap_or_else(|errors| panic!("{source}: {errors:?}"));
-    assert_eq!(type_of(&checked, "ys"), TCType::list(TCType::Str));
+    assert_eq!(
+        type_of(&checked, "ys"),
+        StreamType::List(Box::new(StreamType::Str))
+    );
 }
 
 #[test]
 fn an_empty_list_branch_joins_a_typed_list_in_an_if() {
     let checked = check("out ys: List<Int>\nys = if x > 0 then [x] else []\n");
-    assert_eq!(type_of(&checked, "ys"), TCType::list(TCType::Int));
+    assert_eq!(
+        type_of(&checked, "ys"),
+        StreamType::List(Box::new(StreamType::Int))
+    );
 }
 
 #[test]
@@ -297,4 +444,102 @@ fn an_empty_list_arm_still_refuses_a_different_list_type() {
         "out ys: List<Str>\nys = match(state) {\n  Stopped -> [1],\n  _ -> [\"a\"],\n}\n",
     );
     assert!(!errors.is_empty());
+}
+
+/// The output `y` of a `match` on a tuple of literals, whose alternatives
+/// bind `a` and `b` to swapped positions.
+fn swapped_bindings(output: &str, scrutinee: &str) -> String {
+    format!(
+        "out y: {output}\n\
+         y = match(Tuple({scrutinee})) {{ (0, a, b) | (1, b, a) -> a, _ -> 0, }}\n"
+    )
+}
+
+fn or_pattern_error(body: &str) -> String {
+    let errors = check_err(body);
+    assert_eq!(
+        kind_of(&errors),
+        &TypeErrorKind::OrPatternBindings,
+        "{body}: {errors:?}"
+    );
+    let SemanticError::TypeError(error) = &errors[0] else {
+        unreachable!("kind_of found a type error");
+    };
+    error.message().to_owned()
+}
+
+// Pattern bindings use the already concrete scrutinee type.
+#[test]
+fn or_pattern_alternatives_share_concrete_binding_types() {
+    let int = swapped_bindings("Int", "1,10,100");
+    assert_eq!(type_of(&check(&int), "y"), StreamType::Int);
+    let inferred = "out y\ny=match(Tuple(1,10,100)) { (0,a,b)|(1,b,a)->b, _->0, }";
+    assert_eq!(type_of(&check(inferred), "y"), StreamType::Int);
+    let float = swapped_bindings("Float", "1,10.0,100.0");
+    assert_eq!(type_of(&check(&float), "y"), StreamType::Float);
+    or_pattern_error(&swapped_bindings("Float", "1,10,2.5"));
+    let lists = "out y:List<Int> =match(Tuple([] as List<Int>,[1])) { (a,_)|(_,a)->a, _->[], }";
+    assert_eq!(
+        type_of(&check(lists), "y"),
+        StreamType::List(Box::new(StreamType::Int))
+    );
+    assert!(
+        !check_err("out y:List<Int> =match(Tuple([],[1])) { (a,_)|(_,a)->a, _->[], }").is_empty()
+    );
+}
+
+// Alternatives that bind a name at two different types have no one meaning
+// for the arm, whichever alternative comes first.
+#[test]
+fn or_pattern_alternatives_still_refuse_different_types() {
+    for scrutinee in [
+        "x, \"s\"", "\"s\", x", "1, \"s\"", "\"s\", 1", "x, 2.5", "2.5, x",
+    ] {
+        or_pattern_error(&format!(
+            "out y\ny = match(Tuple({scrutinee})) {{ (a, _) | (_, a) -> a, _ -> 0, }}\n"
+        ));
+    }
+    or_pattern_error(&swapped_bindings("Int", "1, 10, \"s\""));
+}
+
+// A refusal says which types disagree, as they were before the comparison:
+// `a` could have become a `Float` on the way to `b` refusing.
+#[test]
+fn an_or_pattern_refusal_names_the_types_and_decides_nothing() {
+    let message = or_pattern_error(
+        "out y\ny = match(Tuple(1, 2.5, \"s\")) { (a, b, _) | (_, a, b) -> a, _ -> 0, }\n",
+    );
+    assert!(
+        message.contains("binds a: Float, b: Str")
+            && message.contains("earlier alternative binds a: Int, b: Float"),
+        "{message}"
+    );
+    // Different names are said as such, with nothing to compare.
+    let message = or_pattern_error("out y: Int\ny = match(state) { Moving(n) | Stopped -> 0, }\n");
+    assert!(
+        message.contains("binds nothing") && message.contains("binds n: Int"),
+        "{message}"
+    );
+}
+
+#[test]
+fn pattern_names_derive_from_the_known_scrutinee() {
+    for (typ, arm) in [
+        ("(Int, Int)", "(a,b) -> a"),
+        ("List<Int>", "[a] -> a"),
+        ("Struct<f:Int>", "{f:a,..} -> a"),
+        ("List<(Int, Struct<f:List<Int>>)> ", "[(a,{f:[b]})] -> b"),
+    ] {
+        assert_eq!(
+            type_of(
+                &check(&format!(
+                    "in v:{typ}\nout y:Int=match(v) {{ {arm}, _ -> 0, }}"
+                )),
+                "y"
+            ),
+            StreamType::Int
+        );
+    }
+    check("in v:List<Int>\nout y:Bool=matches(v,[a] if a>0)");
+    assert!(!check_err("out y:Bool=matches([],[a] if a>0)").is_empty());
 }

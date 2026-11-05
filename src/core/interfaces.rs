@@ -21,11 +21,10 @@ pub enum Semantics {
     /// Reference evaluation strategy, retained for library callers and tests.
     #[value(skip)]
     Untimed,
-    TypedUntimed,
-    /// Untimed evaluation with gradual type checking and inference.
-    #[value(name = "untimed", alias = "gradual-typed-untimed")]
+    /// Untimed DSRV evaluation.
+    #[value(name = "untimed", aliases = ["typed-untimed", "gradual-typed-untimed"])]
     #[strum(serialize = "untimed")]
-    GradualTypedUntimed,
+    TypedUntimed,
     /// Causal-set explanations for DSRV on the semi-sync runtime.
     Causal,
     DelayedQuantitative,

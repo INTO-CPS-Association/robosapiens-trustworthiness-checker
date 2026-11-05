@@ -2,6 +2,8 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const { resolve } = require("node:path");
 const {
     allBenchmarkNames,
     benchmarkFor,
@@ -147,10 +149,10 @@ test("collapses both legacy sustained Value-JIT routes and prefers the current I
     assert.equal(benchmarkFor(run("2026-08-01T12:00:00Z", [warmedLegacy]), current).name, warmedLegacy);
 });
 
-test("keeps historical untyped and current gradually checked sustained routes distinct", () => {
+test("keeps historical untyped and current unspecialized sustained routes distinct", () => {
     const prefix = "jit/sustained/arithmetic";
     const old = `${prefix}/untyped_value`;
-    const current = `${prefix}/gradually_checked_value`;
+    const current = `${prefix}/unspecialized_value`;
     const names = sustainedMonitorCard(["Scalar arithmetic", "arithmetic"]).series.map(
         (series) => series.name,
     );
@@ -160,4 +162,26 @@ test("keeps historical untyped and current gradually checked sustained routes di
     assert.deepEqual(allBenchmarkNames([history]), [current, old]);
     assert.equal(benchmarkFor(history, current).name, current);
     assert.equal(benchmarkFor(history, old).name, old);
+});
+
+test("preserves gradually checked measurements under the unspecialized route", () => {
+    const current = "jit/sustained/arithmetic/unspecialized_value";
+    const legacy = "jit/sustained/arithmetic/gradually_checked_value";
+    const history = run("2026-09-23T17:25:24Z", [legacy]);
+    assert.deepEqual(allBenchmarkNames([history]), [current]);
+    assert.equal(benchmarkFor(history, current).name, legacy);
+    assert.equal(benchmarkFor(run("2026-11-05T12:00:00Z", [legacy, current]), current).name, current);
+});
+
+test("CI selects and requires every current sustained dashboard route", () => {
+    const workflow = readFileSync(resolve(__dirname, "../../.github/workflows/rust-only.yaml"), "utf8");
+    const filterLine = workflow.split("\n").find((line) => line.includes("^jit/sustained/"));
+    const filter = new RegExp(filterLine.slice(filterLine.indexOf("^jit/sustained/")).trim());
+    const required = new Set(workflow.split("\n").map((line) => line.trim()));
+    const card = sustainedMonitorCard(["Scalar arithmetic", "arithmetic"]);
+    for (const { name } of card.series) {
+        if (name.endsWith("/untyped_value")) continue;
+        assert.ok(filter.test(name), `CI must select ${name}`);
+        assert.ok(required.has(name), `CI must require ${name}`);
+    }
 });

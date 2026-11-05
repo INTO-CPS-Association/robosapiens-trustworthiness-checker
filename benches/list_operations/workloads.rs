@@ -10,7 +10,7 @@ use std::hint::black_box;
 use ecow::{EcoString, EcoVec};
 use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::dataflow::DataflowMonitor;
-use trustworthiness_checker::{TypeCheckOptions, Value, VarName};
+use trustworthiness_checker::{Value, VarName};
 
 const RECORD: &str = "Struct<key: Int, label: Str, ...>";
 
@@ -133,10 +133,7 @@ impl Workload {
             "in xs: List<{t}>\nin one: List<{t}>\nin empty: List<{t}>\nin x: {t}\nin k: Int\n\
              out z: {output}\nz = {expression}\n"
         );
-        let spec = trustworthiness_checker::dsrv_fixtures::elaborated_with(
-            &source,
-            TypeCheckOptions::GRADUAL,
-        );
+        let spec = trustworthiness_checker::dsrv_fixtures::elaborated(&source);
         let monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
             .unwrap_or_else(|error| panic!("{name} should compile: {error:?}"));
         let xs: EcoVec<Value> = (0..len as i64).map(|key| element.value(key)).collect();

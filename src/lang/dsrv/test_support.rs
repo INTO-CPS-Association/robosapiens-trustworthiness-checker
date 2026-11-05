@@ -10,20 +10,16 @@ use proptest::prelude::*;
 use crate::dsrv_fixtures::WithoutWarnings;
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::lang::dsrv::diagnostics::SemanticResult;
-use crate::{DsrvSpecification, VarName, core::BinaryOperator, lang::dsrv::ast::Expr};
+use crate::{
+    DsrvSpecification, VarName,
+    core::{BinaryOperator, StreamType},
+    lang::dsrv::ast::Expr,
+};
 
-/// Check strictly, for tests that expect no warning.
+/// Check concrete types, for tests that expect no warning.
 #[track_caller]
 pub(crate) fn type_check(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
     crate::lang::dsrv::type_checker::type_check(spec).without_warnings()
-}
-
-/// Check gradually, for tests that expect no warning.
-#[track_caller]
-pub(crate) fn type_check_gradual(
-    spec: DsrvSpecification,
-) -> SemanticResult<CheckedDsrvSpecification> {
-    crate::lang::dsrv::type_checker::type_check_gradual(spec).without_warnings()
 }
 
 /// Span-free semantic-entry oracle for ordered-specification properties.
@@ -128,7 +124,7 @@ pub(crate) fn arb_ordered_specification_case() -> impl Strategy<Value = OrderedS
             for index in 0..input_count {
                 entries.push(DeclarationOracle::Input {
                     name: format!("input_{index}"),
-                    annotation: (index % 2 == 0).then_some("Int"),
+                    annotation: Some("Int"),
                 });
             }
             for index in 0..output_count {
@@ -668,38 +664,30 @@ pub fn arb_string_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
     })
 }
 
+/// Concrete acyclic Boolean specifications, with at least one output root.
+/// Inputs ground every expression; output types are inferred from their bodies.
 pub fn arb_boolean_dsrv_spec() -> impl Strategy<Value = DsrvSpecification> {
     (
-        // Generate a hash set of inputs from 'a' to 'h' with at least one element.
-        prop::collection::hash_set("[a-h]", 1..5),
-        // Generate a hash set of outputs from 'i' to 'z'. Could be empty.
-        prop::collection::hash_set("[i-z]", 0..5),
+        prop::collection::btree_set("[a-h]", 1..5),
+        prop::collection::btree_set("[i-z]", 1..5),
     )
-        .prop_flat_map(|(input_set, output_set)| {
-            // Convert the sets into Vec<VarName>
-            let input_vars: BTreeSet<VarName> = input_set.into_iter().map(|s| s.into()).collect();
-            let output_vars: BTreeSet<_> = output_set.into_iter().map(|s| s.into()).collect();
-
-            // Combine input and output variables.
-            let all_vars = input_vars
-                .clone()
-                .into_iter()
-                .chain(output_vars.clone().into_iter())
-                .collect::<Vec<VarName>>();
-
-            // Create a strategy for generating the expression map.
-            // For each key (chosen from the union of variables) generate an expression.
-            prop::collection::btree_map(
-                prop::sample::select(all_vars.clone()),
-                arb_boolean_sexpr(all_vars.clone()),
-                0..=all_vars.len(),
+        .prop_flat_map(|(inputs, outputs)| {
+            let inputs: BTreeSet<VarName> = inputs.into_iter().map(VarName::from).collect();
+            let outputs: BTreeSet<VarName> = outputs.into_iter().map(VarName::from).collect();
+            prop::collection::vec(
+                arb_boolean_sexpr(inputs.iter().cloned().collect()),
+                outputs.len(),
             )
-            .prop_map(move |exprs| {
+            .prop_map(move |expressions| {
                 DsrvSpecification::new(
-                    input_vars.clone(),
-                    output_vars.clone(),
-                    exprs,
-                    BTreeMap::new(),
+                    inputs.clone(),
+                    outputs.clone(),
+                    outputs.iter().cloned().zip(expressions).collect(),
+                    inputs
+                        .iter()
+                        .cloned()
+                        .map(|input| (input, StreamType::Bool))
+                        .collect(),
                     Vec::new(),
                 )
             })
@@ -707,7 +695,7 @@ pub fn arb_boolean_dsrv_spec() -> impl Strategy<Value = DsrvSpecification> {
 }
 
 pub fn arb_dsrv_spec() -> impl Strategy<Value = DsrvSpecification> {
-    (
+    let partial = (
         prop::collection::btree_set("[a-h]", 0..5),
         prop::collection::btree_set("[i-z]", 0..5),
     )
@@ -747,5 +735,9 @@ pub fn arb_dsrv_spec() -> impl Strategy<Value = DsrvSpecification> {
                     )
                 },
             )
-        })
+        });
+    prop_oneof![
+        3 => partial,
+        1 => arb_ordered_specification_case().prop_map(|case| case.source.parse().expect("concrete ordered specification parses")),
+    ]
 }

@@ -161,7 +161,7 @@ pub(in crate::dataflow) fn arb_lifecycle_case() -> impl Strategy<Value = Lifecyc
     )
         .prop_map(|(recipes, trace_a, trace_b)| LifecycleCase {
             specification: specification_from_recipes(&recipes)
-                .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+                .check_and_elaborate()
                 .without_warnings()
                 .expect("lifecycle specifications check"),
             trace_a,

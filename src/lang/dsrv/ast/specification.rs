@@ -10,11 +10,9 @@ use super::{
 };
 use crate::core::{RuntimeCapabilities, RuntimeCapabilityRequirement};
 use crate::core::{Specification, StreamType, VarName};
-use crate::lang::dsrv::TypeCheckMode;
 use crate::lang::dsrv::source::{SourceContext, TypeName};
 use crate::lang::dsrv::source_map::{NodeOrigin, SourceArchive};
 use crate::lang::dsrv::span::Span;
-use crate::lang::dsrv::type_checker::RuntimeChecks;
 
 /// A declaration-level error in a forest-backed DSRV syntax tree.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -363,47 +361,18 @@ impl Debug for DsrvSpecification {
 }
 
 /// A specification paired with one immutable type for every reachable AST node,
-/// and the policy that checked it.
+/// available before execution.
 #[derive(Clone, Debug)]
 pub struct CheckedDsrvSpecification {
     pub(super) spec: DsrvSpecification,
     checked: AstShared<CheckedExpressionContext>,
-    mode: TypeCheckMode,
-    /// What checking leaves for elaboration to check when the specification
-    /// runs. `None` after elaboration, which has placed those checks in the
-    /// tree, and for any rewrite of an elaborated tree.
-    runtime_checks: Option<AstShared<RuntimeChecks>>,
 }
 
 impl CheckedDsrvSpecification {
-    pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes, mode: TypeCheckMode) -> Self {
+    pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes) -> Self {
         let environment = AstShared::new(spec.type_annotations().clone());
         let checked = AstShared::new(CheckedExpressionContext::new(expr_types, environment));
-        Self {
-            spec,
-            checked,
-            mode,
-            runtime_checks: None,
-        }
-    }
-
-    /// This specification as checking left it, with the run-time checks of
-    /// the `Any` values it accepted at a concrete type.
-    pub(crate) fn with_runtime_checks(mut self, runtime_checks: RuntimeChecks) -> Self {
-        self.runtime_checks = Some(AstShared::new(runtime_checks));
-        self
-    }
-
-    /// The run-time checks checking recorded, which elaboration places in
-    /// the tree; `None` once it has.
-    pub(crate) fn runtime_checks(&self) -> Option<&RuntimeChecks> {
-        self.runtime_checks.as_deref()
-    }
-
-    /// The policy this specification was checked with. Rewrites of a checked
-    /// specification keep it.
-    pub fn check_mode(&self) -> TypeCheckMode {
-        self.mode
+        Self { spec, checked }
     }
 
     pub fn unchecked(&self) -> &DsrvSpecification {
@@ -446,8 +415,6 @@ impl CheckedDsrvSpecification {
         Self {
             spec: self.spec,
             checked: AstShared::new(checked),
-            mode: self.mode,
-            runtime_checks: self.runtime_checks,
         }
     }
 
@@ -851,7 +818,6 @@ mod tests {
     use proptest::prelude::*;
     use tracing::info;
 
-    use crate::TypeCheckOptions;
     use crate::VarName;
     use crate::core::BinaryOperator;
     use crate::core::{Specification, StreamType, StreamTypeAscription};
@@ -870,10 +836,9 @@ mod tests {
         DeclarationOracle, arb_boolean_sexpr, arb_duplicate_declaration_case, arb_float_sexpr,
         arb_int_sexpr, arb_mixed_sexpr, arb_ordered_specification_case, arb_string_sexpr,
     };
-    use crate::lang::dsrv::type_checker::TCType;
 
     fn checked_expression(source: &str) -> CheckedExpr {
-        crate::dsrv_fixtures::checked_with(source, TypeCheckOptions::STRICT)
+        crate::dsrv_fixtures::checked(source)
             .var_expr(&VarName::new("y"))
             .unwrap()
     }
@@ -955,15 +920,11 @@ mod tests {
             .unwrap();
         let validated_local = source.clone().validate().unwrap();
         let validated_distributed = source.clone().validate().unwrap();
-        let checked_local = source
-            .clone()
-            .check(TypeCheckOptions::STRICT)
-            .without_warnings()
-            .unwrap();
+        let checked_local = source.clone().check().without_warnings().unwrap();
         let checked_distributed = source
             .validate()
             .unwrap()
-            .check(TypeCheckOptions::STRICT)
+            .check()
             .without_warnings()
             .unwrap();
 
@@ -983,14 +944,14 @@ mod tests {
                     .var_expr_ref(&VarName::new("thread_mode_output"))
                     .unwrap()
                     .typ(),
-                &TCType::Int
+                &StreamType::Int
             );
             assert_eq!(
                 checked_distributed
                     .var_expr_ref(&VarName::new("thread_mode_output"))
                     .unwrap()
                     .typ(),
-                &TCType::Int
+                &StreamType::Int
             );
         });
         joined.join().unwrap();
@@ -1056,13 +1017,13 @@ mod tests {
         let expression = checked_expression("out y: Int\ny = 1 + 2");
         let root = expression.as_ref();
 
-        assert_eq!(root.typ(), &TCType::Int);
+        assert_eq!(root.typ(), &StreamType::Int);
         let ExprView::BinOp(left, right, _) = root.view() else {
             panic!("expected binary expression");
         };
-        assert_eq!(left.typ(), &TCType::Int);
-        assert_eq!(right.typ(), &TCType::Int);
-        assert!(root.children().all(|child| child.typ() == &TCType::Int));
+        assert_eq!(left.typ(), &StreamType::Int);
+        assert_eq!(right.typ(), &StreamType::Int);
+        assert!(root.children().all(|child| child.typ() == &StreamType::Int));
         assert!(root.postorder().all(|node| {
             node.shared_type_environment() == expression.as_ref().shared_type_environment()
         }));
@@ -1078,15 +1039,15 @@ mod tests {
             panic!("expected tuple expression");
         };
 
-        assert_eq!(items.next().unwrap().typ(), &TCType::Int);
+        assert_eq!(items.next().unwrap().typ(), &StreamType::Int);
         let ExprView::List(mut list_items) = items.next().unwrap().view() else {
             panic!("expected list expression");
         };
-        assert_eq!(list_items.next().unwrap().typ(), &TCType::Int);
+        assert_eq!(list_items.next().unwrap().typ(), &StreamType::Int);
         let ExprView::Struct(fields) = items.next().unwrap().view() else {
             panic!("expected struct expression");
         };
-        assert_eq!(fields.get("x").unwrap().typ(), &TCType::Int);
+        assert_eq!(fields.get("x").unwrap().typ(), &StreamType::Int);
     }
 
     #[test]
@@ -1710,7 +1671,7 @@ mod tests {
         let checked = crate::dsrv_fixtures::checked("in z: Int\nout b: Int\nb = z + 1");
         let b = VarName::new("b");
         assert_checked_views(&checked);
-        assert_eq!(checked.var_expr_ref(&b).unwrap().typ(), &TCType::Int);
+        assert_eq!(checked.var_expr_ref(&b).unwrap().typ(), &StreamType::Int);
         assert_eq!(
             checked.var_expr(&b).unwrap(),
             <CheckedDsrvSpecification as Specification>::var_expr(&checked, &b).unwrap()
@@ -1720,8 +1681,8 @@ mod tests {
         let expression = checked.var_expr(&b).unwrap();
         let clone = checked.clone();
         drop(checked);
-        assert_eq!(expression.typ(), &TCType::Int);
-        assert_eq!(clone.var_expr_ref(&b).unwrap().typ(), &TCType::Int);
+        assert_eq!(expression.typ(), &StreamType::Int);
+        assert_eq!(clone.var_expr_ref(&b).unwrap().typ(), &StreamType::Int);
     }
 
     #[test]
@@ -1940,7 +1901,7 @@ mod tests {
             .parse::<DsrvSpecification>()
             .unwrap();
         let res = format!("{}", spec);
-        let expected = "in x\nin y\nout z\nz = (x + y)\n";
+        let expected = "in x: Int\nin y: Int\nout z\nz = (x + y)\n";
         assert_eq!(res, expected);
     }
 
@@ -1960,7 +1921,7 @@ mod tests {
             .parse::<DsrvSpecification>()
             .unwrap();
         let res = format!("{}", spec);
-        let expected = "in x\nin y\nout z\naux u\naux w\nu = x\nw = y\nz = (u + w)";
+        let expected = "in x: Int\nin y: Int\nout z\naux u\naux w\nu = x\nw = y\nz = (u + w)";
         assert_eq!(
             res.lines().collect::<BTreeSet<_>>(),
             expected.lines().collect::<BTreeSet<_>>()

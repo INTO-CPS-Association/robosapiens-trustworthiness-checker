@@ -95,7 +95,7 @@ fn checked_inspection_stays_unprepared_and_elaboration_prepares_every_occurrence
         let node = occurrence(expr.expr());
         let site = expr.cursor(node).runtime_expression();
         let typing = site.typing().expect("an elaborated site is typed");
-        assert_eq!(typing.expected, TCType::Int, "{name}");
+        assert_eq!(typing.expected, StreamType::Int, "{name}");
         assert!(AstShared::ptr_eq(
             &typing.environment,
             expr.as_ref().shared_type_environment()
@@ -187,7 +187,7 @@ fn extracted_handles_keep_their_sites_after_the_specification_drops() {
         .runtime_expression()
         .parse_and_check("x + 1")
         .expect("source checks at the extracted site");
-    assert_eq!(accepted.typ(), &TCType::Int);
+    assert_eq!(accepted.typ(), &StreamType::Int);
 
     let node = occurrence(untyped.expr());
     assert!(untyped.site(node).parse_unchecked("x + 1").is_ok());
@@ -278,7 +278,7 @@ fn localisation_rebuilds_sites_and_drops_removed_occurrences() {
         assert_eq!(nodes.len(), 1, "{name} keeps its own occurrence");
         for node in nodes {
             let site = expression.cursor(node).runtime_expression();
-            assert_eq!(site.typing().unwrap().expected, TCType::Int);
+            assert_eq!(site.typing().unwrap().expected, StreamType::Int);
             // Localisation keeps only the inputs `y` reads.
             assert!(site.parse_and_check("1").is_ok());
             assert!(site.parse_and_check("x").is_err());
@@ -297,14 +297,21 @@ fn localisation_rebuilds_sites_and_drops_removed_occurrences() {
 }
 
 #[test]
-fn an_untyped_view_keeps_the_lexical_site_and_ignores_types() {
+fn an_untyped_view_keeps_the_lexical_site_and_concrete_source_contract() {
     let elaborated = elaborated(OCCURRENCES);
     let expr = elaborated.var_expr(&var("z")).expect("z exists");
     let node = occurrence(expr.expr());
     let typed = expr.cursor(node).runtime_expression();
     let untyped = expr.untyped().site(node);
     assert!(typed.typing().is_some());
-    assert!(untyped.typing().is_none());
+    assert_eq!(
+        untyped.typing().unwrap().expected,
+        typed.typing().unwrap().expected
+    );
+    assert!(AstShared::ptr_eq(
+        &untyped.typing().unwrap().environment,
+        &typed.typing().unwrap().environment
+    ));
     assert!(untyped.same_lexical_environment(typed));
     assert!(std::ptr::eq(untyped.context(), typed.context()));
     assert!(std::ptr::eq(untyped.callable(), typed.callable()));
@@ -331,7 +338,7 @@ fn checked_runtime_source_is_prepared_before_it_escapes() {
     let nested_site = nested
         .cursor(occurrence(nested.expr()))
         .runtime_expression();
-    assert_eq!(nested_site.typing().unwrap().expected, TCType::Int);
+    assert_eq!(nested_site.typing().unwrap().expected, StreamType::Int);
     assert!(nested_site.same_lexical_environment(&site));
 }
 
@@ -347,7 +354,7 @@ fn checked_runtime_source_is_elaborated_at_the_type_its_site_expects() {
     let literal = site
         .parse_and_check("1")
         .expect("an Int literal adopts Float");
-    assert_eq!(literal.typ(), &TCType::Float);
+    assert_eq!(literal.typ(), &StreamType::Float);
     assert!(matches!(
         literal.as_ref().view(),
         crate::lang::dsrv::ast::ExprView::Val(SyntaxLiteral::Float(value)) if *value == 1.0
@@ -392,4 +399,59 @@ fn runtime_source_may_call_a_def_visible_at_its_site() {
     );
     let parsed = site.parse_unchecked("twice(x)").expect("twice is visible");
     assert!(parsed.expr().to_string().contains('*'), "{}", parsed.expr());
+}
+
+#[test]
+fn arriving_source_validates_binding_scopes_before_expression_types() {
+    let enclosing = elaborated(
+        "use experimental::pattern_matching\nin source:Str\nin x:Int\nout y:Int=dynamic(source:Int)",
+    );
+    let expression = enclosing.var_expr(&var("y")).unwrap();
+    let site = expression
+        .cursor(occurrence(expression.expr()))
+        .runtime_expression();
+    for operator in ["dynamic", "defer"] {
+        for source in [
+            format!("(\\local:Int -> {operator}(source:Int,{{local}}))(x)"),
+            format!("match(x) {{ local -> {operator}(source:Int,{{local}}), }}"),
+        ] {
+            for source in [source.clone(), format!("!1 + ({source})")] {
+                let error = site
+                    .parse_and_check(&source)
+                    .expect_err("arrival validation rejects a binder used as a stream");
+                let RuntimeExpressionError::TypeCheck { errors, .. } = error else {
+                    panic!("{error:?}");
+                };
+                let [
+                    crate::lang::dsrv::diagnostics::SemanticError::InvalidRuntimeScope(
+                        message,
+                        span,
+                        location,
+                    ),
+                ] = errors.as_slice()
+                else {
+                    panic!("{source}: {errors:?}");
+                };
+                assert!(
+                    message.contains("local") && message.contains("parameter or pattern binding"),
+                    "{message}"
+                );
+                assert!(span.is_some());
+                let snippet = location
+                    .primary()
+                    .and_then(|site| site.snippet())
+                    .expect("arrival error retains its source");
+                assert_eq!(snippet, format!("{operator}(source:Int,{{local}})"));
+            }
+        }
+        for source in [
+            format!("(\\local:Int -> {operator}(source:Int,{{x}}))(x)"),
+            format!("match(x) {{ local -> {operator}(source:Int,{{x}}), }}"),
+        ] {
+            let accepted = site
+                .parse_and_check(&source)
+                .expect("known stream scopes remain valid beneath binders");
+            assert_eq!(accepted.typ(), &StreamType::Int);
+        }
+    }
 }

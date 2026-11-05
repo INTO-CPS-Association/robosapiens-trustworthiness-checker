@@ -75,11 +75,7 @@ fn plain_mode_needs_no_runtime_input_or_output_configuration() {
 #[test]
 fn semantic_failure_is_status_one_with_empty_stdout() {
     let path = model("out y: Bool\ny = 1");
-    let output = command()
-        .args(["--check-mode", "strict"])
-        .arg(&path)
-        .output()
-        .unwrap();
+    let output = command().arg("--check").arg(&path).output().unwrap();
     fs::remove_file(path).unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -130,18 +126,14 @@ fn global_view_loads_real_filesystem_and_embedded_modules_deterministically() {
 }
 
 #[test]
-fn documented_std_option_example_is_strictly_checked() {
+fn documented_std_option_example_is_checked() {
     let model = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/std_option.dsrv");
-    let output = command()
-        .args(["--check-mode", "strict"])
-        .arg(model)
-        .output()
-        .unwrap();
+    let output = command().arg("--check").arg(model).output().unwrap();
 
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty());
     let report = String::from_utf8(output.stdout).unwrap();
-    assert!(report.contains("checked (strict)"));
+    assert!(report.contains("checked"));
     assert!(report.contains("std::option [embedded catalogue]"));
     assert!(report.contains("in reading: Union<None, Some: Int>"));
     assert!(report.contains("sample = Some(7)"));

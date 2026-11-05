@@ -187,10 +187,7 @@ fn prepare_dataflow(rows: usize) -> trustworthiness_checker::runtime::dataflow::
     smol::block_on(
         trustworthiness_checker::runtime::dataflow::DataflowRuntimeBuilder::new()
             .executor(executor)
-            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
-                spec,
-                trustworthiness_checker::core::Semantics::Untimed,
-            ))
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate(spec))
             .input(input.into())
             .output_writer(output)
             .build(),

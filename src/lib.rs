@@ -16,7 +16,7 @@ pub mod io;
 pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
-    ElaboratedDsrvSpecification, TypeCheckMode, TypeCheckOptions,
+    ElaboratedDsrvSpecification,
     ast::{CheckedDsrvSpecification, Declaration, DsrvSpecification, ValidatedDsrvSpecification},
 };
 #[cfg(test)]

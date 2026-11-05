@@ -247,17 +247,6 @@ impl SemanticError {
         self
     }
 
-    /// Locate this error where `cause` was located, or failing that at
-    /// `origin`: for an error that restates another at the other's span.
-    pub(crate) fn located_as(mut self, cause: &Self, origin: NodeOrigin) -> Self {
-        if !cause.location().is_unset() && self.span() == cause.span() {
-            *self.location_mut() = cause.location().clone();
-            self
-        } else {
-            self.located(origin)
-        }
-    }
-
     /// Give the error owned files from `archive`, the one its checking
     /// attempt addressed, as that attempt finishes.
     pub(crate) fn materialise(&mut self, archive: Option<&SourceArchive>) {
@@ -282,6 +271,29 @@ impl SemanticError {
     }
 }
 
+impl std::fmt::Display for SemanticError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateDeclaration { variable, .. } => {
+                write!(f, "{variable} is declared more than once")?;
+            }
+            Self::TypeError(error) => f.write_str(error.message())?,
+            Self::DeferredError(message, _, _)
+            | Self::UndeclaredVariable(message, _, _)
+            | Self::MissingTypeAnnotation(message, _, _)
+            | Self::MissingTypeAscription(message, _, _)
+            | Self::UnsupportedLiteral(message, _, _)
+            | Self::UnsupportedExpression(message, _, _)
+            | Self::InvalidRuntimeScope(message, _, _) => f.write_str(message)?,
+            Self::UnresolvedType(error) => f.write_str(error.message())?,
+        }
+        match self.span() {
+            Some(span) => write!(f, " {}", self.location().describe(span)),
+            None => Ok(()),
+        }
+    }
+}
+
 /// Give every error owned files from `archive` as a checking attempt that
 /// addressed it finishes.
 pub(crate) fn materialise_errors(errors: &mut [SemanticError], archive: Option<&SourceArchive>) {
@@ -294,31 +306,21 @@ pub type SemanticErrors = Vec<SemanticError>;
 
 pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
 
-/// What a [`SemanticWarning`] reports. Each kind is one warning rule, and
-/// its [`code`](Self::code) is the stable name consumers match on; messages
+/// What a [`SemanticWarning`] reports. Each kind is one finding, and its
+/// [`code`](Self::code) is the stable name consumers match on; messages
 /// may change wording.
 ///
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum SemanticWarningKind {
     RedundantCast,
-    HeterogeneousBranches,
-    #[cfg(test)]
-    TestAlpha,
-    #[cfg(test)]
-    TestBeta,
 }
 
 impl SemanticWarningKind {
-    /// The stable, descriptive code of this warning rule.
+    /// The stable, descriptive code of this kind of warning.
     pub fn code(self) -> &'static str {
         match self {
             Self::RedundantCast => "dsrv.redundant-cast",
-            Self::HeterogeneousBranches => "dsrv.heterogeneous-branches",
-            #[cfg(test)]
-            Self::TestAlpha => "test-alpha",
-            #[cfg(test)]
-            Self::TestBeta => "test-beta",
         }
     }
 }
@@ -373,7 +375,7 @@ impl SemanticWarning {
         self.kind
     }
 
-    /// The stable code of the rule that produced this warning.
+    /// The stable code of this warning's kind.
     pub fn code(&self) -> &'static str {
         self.kind.code()
     }
@@ -448,9 +450,9 @@ mod tests {
 
     fn warnings() -> Vec<SemanticWarning> {
         vec![
-            SemanticWarning::new(SemanticWarningKind::TestBeta, "second", None),
+            SemanticWarning::new(SemanticWarningKind::RedundantCast, "second", None),
             SemanticWarning::new(
-                SemanticWarningKind::TestAlpha,
+                SemanticWarningKind::RedundantCast,
                 "first",
                 Some(Span::new(1, 2)),
             ),
@@ -495,10 +497,10 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_exposes_its_rule_code_message_and_span() {
+    fn a_warning_exposes_its_kind_code_message_and_span() {
         let warning = &warnings()[1];
-        assert_eq!(warning.kind(), SemanticWarningKind::TestAlpha);
-        assert_eq!(warning.code(), "test-alpha");
+        assert_eq!(warning.kind(), SemanticWarningKind::RedundantCast);
+        assert_eq!(warning.code(), "dsrv.redundant-cast");
         assert_eq!(warning.message(), "first");
         assert_eq!(warning.span(), Some(Span::new(1, 2)));
     }

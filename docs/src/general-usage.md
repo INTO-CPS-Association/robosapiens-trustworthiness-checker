@@ -27,7 +27,7 @@ With no output option, results go to stdout. Use `--output-stdout` to make that
 choice explicit, or choose one output route such as `--mqtt-output`,
 `--redis-output`, `--output-ros-file PATH`, or `--output-config PATH`.
 
-The default language is `dsrv`, with gradually typed `untimed` semantics, the
+The default language is `dsrv`, with `untimed` semantics, the
 `dataflow` runtime, and buffered execution. See `cargo run -- --help` for the
 complete option set.
 

@@ -257,10 +257,7 @@ impl ScopedExpr {
         self.expr.as_ref()
     }
 
-    pub(super) fn typ<'a>(
-        &'a self,
-        expr: ExprRef<'a>,
-    ) -> Option<&'a crate::lang::dsrv::type_checker::TCType> {
+    pub(super) fn typ<'a>(&'a self, expr: ExprRef<'a>) -> Option<&'a crate::core::StreamType> {
         match &self.phase {
             ExprPhase::Unchecked | ExprPhase::Untyped(_) => None,
             ExprPhase::Checked(checked) => Some(checked.cursor(expr).typ()),
@@ -270,7 +267,7 @@ impl ScopedExpr {
     #[cfg(test)]
     pub(super) fn shared_type_environment(
         &self,
-    ) -> Option<&AstShared<crate::lang::dsrv::type_checker::StreamTypeEnvironment>> {
+    ) -> Option<&AstShared<crate::lang::dsrv::type_checker::StreamTypes>> {
         match &self.phase {
             ExprPhase::Unchecked | ExprPhase::Untyped(_) => None,
             ExprPhase::Checked(checked) => Some(checked.as_ref().shared_type_environment()),
@@ -281,7 +278,7 @@ impl ScopedExpr {
     pub(super) fn runtime_expression(&self, expr: ExprRef<'_>) -> RuntimeExpressionSite {
         match &self.phase {
             ExprPhase::Unchecked => RuntimeExpressionSite::unlocated(expr),
-            ExprPhase::Untyped(sites) => sites.site(expr).untyped(),
+            ExprPhase::Untyped(sites) => sites.site(expr).clone(),
             ExprPhase::Checked(checked) => checked.cursor(expr).runtime_expression().clone(),
         }
     }

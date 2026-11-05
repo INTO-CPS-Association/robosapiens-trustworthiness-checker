@@ -105,10 +105,10 @@ mod tests {
         assert_eq!(
             rendered(
                 source,
-                &[warning(SemanticWarningKind::TestAlpha, Some(span))]
+                &[warning(SemanticWarningKind::RedundantCast, Some(span))]
             ),
             format!(
-                "warning[test-alpha]: fixture message\n  --> model.dsrv:2:15 (bytes {start}..{})\n",
+                "warning[dsrv.redundant-cast]: fixture message\n  --> model.dsrv:2:15 (bytes {start}..{})\n",
                 start + 6
             )
         );
@@ -128,10 +128,10 @@ mod tests {
             assert_eq!(
                 rendered(
                     source,
-                    &[warning(SemanticWarningKind::TestBeta, Some(span))]
+                    &[warning(SemanticWarningKind::RedundantCast, Some(span))]
                 ),
                 format!(
-                    "warning[test-beta]: fixture message\n  --> model.dsrv (bytes {}..{})\n",
+                    "warning[dsrv.redundant-cast]: fixture message\n  --> model.dsrv (bytes {}..{})\n",
                     span.start, span.end
                 )
             );
@@ -143,9 +143,9 @@ mod tests {
         assert_eq!(
             rendered(
                 "out y: Str",
-                &[warning(SemanticWarningKind::TestBeta, None)]
+                &[warning(SemanticWarningKind::RedundantCast, None)]
             ),
-            "warning[test-beta]: fixture message\n  --> model.dsrv\n"
+            "warning[dsrv.redundant-cast]: fixture message\n  --> model.dsrv\n"
         );
     }
 
@@ -155,16 +155,16 @@ mod tests {
         let text = rendered(
             source,
             &[
-                warning(SemanticWarningKind::TestBeta, Some(Span::new(2, 3))),
-                warning(SemanticWarningKind::TestAlpha, None),
-                warning(SemanticWarningKind::TestAlpha, Some(Span::new(0, 1))),
+                warning(SemanticWarningKind::RedundantCast, Some(Span::new(2, 3))),
+                warning(SemanticWarningKind::RedundantCast, None),
+                warning(SemanticWarningKind::RedundantCast, Some(Span::new(0, 1))),
             ],
         );
         assert_eq!(
             text,
-            "warning[test-beta]: fixture message\n  --> model.dsrv:1:3 (bytes 2..3)\n\
-             warning[test-alpha]: fixture message\n  --> model.dsrv\n\
-             warning[test-alpha]: fixture message\n  --> model.dsrv:1:1 (bytes 0..1)\n"
+            "warning[dsrv.redundant-cast]: fixture message\n  --> model.dsrv:1:3 (bytes 2..3)\n\
+             warning[dsrv.redundant-cast]: fixture message\n  --> model.dsrv\n\
+             warning[dsrv.redundant-cast]: fixture message\n  --> model.dsrv:1:1 (bytes 0..1)\n"
         );
     }
 
@@ -191,20 +191,20 @@ mod tests {
         let call = Span::new(15, 23);
         let cast = Span::new(24, 35);
         let located = |definition| {
-            warning(SemanticWarningKind::TestAlpha, Some(call)).with_location(archive.locate(
+            warning(SemanticWarningKind::RedundantCast, Some(call)).with_location(archive.locate(
                 NodeOrigin::new(Some(root), Some(SourceSite::new(library, definition))),
                 call,
             ))
         };
         assert_eq!(
             rendered(source, &[located(cast)]),
-            "warning[test-alpha]: fixture message\n  --> model.dsrv:2:5 (bytes 15..23)\n  \
+            "warning[dsrv.redundant-cast]: fixture message\n  --> model.dsrv:2:5 (bytes 15..23)\n  \
              = note: defined at <embedded std/helper.dsrv>:2:3 (bytes 24..35)\n"
         );
         // A definition span that does not fit its file shows its bytes alone.
         assert_eq!(
             rendered(source, &[located(Span::new(26, 27))]),
-            "warning[test-alpha]: fixture message\n  --> model.dsrv:2:5 (bytes 15..23)\n  \
+            "warning[dsrv.redundant-cast]: fixture message\n  --> model.dsrv:2:5 (bytes 15..23)\n  \
              = note: defined at <embedded std/helper.dsrv> (bytes 26..27)\n"
         );
     }
@@ -232,7 +232,7 @@ mod tests {
             &mut FailingWriter,
             "model.dsrv",
             "",
-            &[warning(SemanticWarningKind::TestAlpha, None)],
+            &[warning(SemanticWarningKind::RedundantCast, None)],
         )
         .unwrap_err();
         assert_eq!(error.to_string(), "closed");

@@ -57,13 +57,12 @@ fn typed_monitor_casts_and_rounds_with_ieee_ties_to_even() {
 
 #[test]
 fn typed_monitor_executes_all_scalar_casts() {
-    let report = crate::ElaboratedDsrvSpecification::parse_with(
+    let report = crate::ElaboratedDsrvSpecification::parse(
         "in x: Float\nin integer: Int\n\
          out truncated: Int\nout floored: Int\nout ceiled: Int\nout rounded: Int\n\
          out widened: Float\nout identity: Float\n\
          truncated = trunc(x)\nfloored = floor(x)\nceiled = ceil(x)\nrounded = round(x)\n\
          widened = integer as Float\nidentity = (integer as Float) as Float",
-        crate::TypeCheckOptions::STRICT,
     )
     .expect("the identity-cast monitor parses");
     assert_eq!(

@@ -743,8 +743,7 @@ pub(crate) fn check_experiment_type(
         | SourceTypeKind::Float
         | SourceTypeKind::Str
         | SourceTypeKind::Bool
-        | SourceTypeKind::Unit
-        | SourceTypeKind::Any => {}
+        | SourceTypeKind::Unit => {}
     }
     Ok(())
 }
@@ -787,7 +786,6 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         | ExprKind::BinOp(..)
         | ExprKind::Cast(..)
         | ExprKind::Ascribe(..)
-        | ExprKind::Check(..)
         | ExprKind::Var(..)
         | ExprKind::Dynamic(..)
         | ExprKind::Defer(..)
@@ -845,15 +843,14 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
     }
 }
 
-/// Core has the scalar types, the gradual type, and `Expr` of those.
+/// Core has the scalar types and `Expr` of those.
 pub(crate) fn check_core_type(ty: &StreamType, span: Span) -> Result<(), LanguageError> {
     let construct = match ty {
         StreamType::Int
         | StreamType::Float
         | StreamType::Str
         | StreamType::Bool
-        | StreamType::Unit
-        | StreamType::Any => return Ok(()),
+        | StreamType::Unit => return Ok(()),
         StreamType::Expr(inner) => return check_core_type(inner, span),
         StreamType::List(_) => "a list type",
         StreamType::Tuple(_) => "a tuple type",

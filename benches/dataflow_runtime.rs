@@ -17,10 +17,7 @@ fn compile_program(source: &str) -> DataflowProgram {
     let spec = source
         .parse::<DsrvSpecification>()
         .expect("benchmark specification should parse");
-    let spec = trustworthiness_checker::dsrv_fixtures::elaborate_for(
-        spec,
-        trustworthiness_checker::core::Semantics::Untimed,
-    );
+    let spec = trustworthiness_checker::dsrv_fixtures::elaborate(spec);
     DataflowProgram::compile_with_semantics(spec, trustworthiness_checker::core::Semantics::Untimed)
         .expect("benchmark program should compile")
 }
@@ -29,10 +26,7 @@ fn compile(source: &str) -> DataflowMonitor {
     let spec = source
         .parse::<DsrvSpecification>()
         .expect("benchmark specification should parse");
-    let spec = trustworthiness_checker::dsrv_fixtures::elaborate_for(
-        spec,
-        trustworthiness_checker::core::Semantics::Untimed,
-    );
+    let spec = trustworthiness_checker::dsrv_fixtures::elaborate(spec);
     DataflowMonitor::compile_with_semantics(spec, trustworthiness_checker::core::Semantics::Untimed)
         .expect("benchmark monitor should compile")
 }

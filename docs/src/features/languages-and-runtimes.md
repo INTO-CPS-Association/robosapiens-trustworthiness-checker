@@ -6,7 +6,7 @@ The TC accepts two specification languages. DSRV is the default stream-monitorin
 
 ### DSRV
 
-Use the default `dsrv` language for declarations such as `in x`, `out z`, and equations over current and historical stream values. The CLI's DSRV-compatible semantics are `untimed`, `typed-untimed`, and `causal`. The default, `untimed`, checks annotations and infers missing types gradually; `typed-untimed` requires explicit annotations on all stream variables. Use `--semantics causal --runtime semi-sync` to track the external input observations supporting each result. Causal sets currently require `semi-sync`. The distributed DSRV runtime currently accepts only `untimed`.
+Use the default `dsrv` language for declarations such as `in x: Int`, `out z`, and equations over current and historical stream values. The CLI's DSRV-compatible semantics are `untimed`, `typed-untimed`, and `causal`. The default is `untimed`; `typed-untimed` is an alias. DSRV checks types before monitoring and infers output types from known dependencies; inputs require annotations. Use `--semantics causal --runtime semi-sync` to track the external input observations supporting each result. Causal sets currently require `semi-sync`. The distributed DSRV runtime currently accepts only `untimed`.
 
 Start with [writing and running DSRV models](../tutorials/write-dsrv-monitor.md). Language-level `dynamic` and `defer` are distinct from root monitor reconfiguration.
 The [DSRV dialects and experiments reference](../reference/dsrv-language-settings.md)

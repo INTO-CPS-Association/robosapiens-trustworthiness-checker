@@ -15,11 +15,10 @@ const DYNAMIC: &str = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source
 
 fn program(source: &str) -> DataflowProgram {
     DataflowProgram::compile_with_semantics(
-        trustworthiness_checker::dsrv_fixtures::elaborate_for(
+        trustworthiness_checker::dsrv_fixtures::elaborate(
             source
                 .parse::<DsrvSpecification>()
                 .expect("benchmark specification should parse"),
-            trustworthiness_checker::core::Semantics::Untimed,
         ),
         trustworthiness_checker::core::Semantics::Untimed,
     )
@@ -59,10 +58,8 @@ fn dataflow_lifecycle(c: &mut Criterion) {
                 let specification = black_box(source)
                     .parse::<DsrvSpecification>()
                     .expect("benchmark specification should parse");
-                let specification = trustworthiness_checker::dsrv_fixtures::elaborate_for(
-                    specification,
-                    trustworthiness_checker::core::Semantics::Untimed,
-                );
+                let specification =
+                    trustworthiness_checker::dsrv_fixtures::elaborate(specification);
                 black_box(
                     DataflowMonitor::compile_with_semantics(
                         specification,

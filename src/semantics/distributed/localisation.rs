@@ -12,7 +12,8 @@ use crate::lang::dsrv::ast::{
     CheckedDsrvSpecification, Declaration, DependencyKind, DsrvSpecification, ExprBuilder,
     ExprForestMap, ExprId, ExprView,
 };
-use crate::lang::dsrv::type_checker::TCType;
+
+use crate::core::StreamType;
 
 use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
@@ -183,7 +184,7 @@ impl LocalStreams {
 fn local_equations(
     elaborated: &CheckedDsrvSpecification,
     local: &LocalStreams,
-) -> (ExprForestMap<VarName>, Vec<TCType>) {
+) -> (ExprForestMap<VarName>, Vec<StreamType>) {
     let names = elaborated
         .unchecked()
         .exprs
@@ -320,7 +321,7 @@ fn localise_checked(
     );
     localised.source_context = original.source_context.clone();
     localised.sources = original.sources.clone();
-    CheckedDsrvSpecification::new(localised, expr_types, elaborated.check_mode())
+    CheckedDsrvSpecification::new(localised, expr_types)
 }
 
 impl ElaboratedDsrvSpecification {
@@ -371,13 +372,13 @@ mod tests {
     use contiguous_tree::TreeCursorExt;
     use petgraph::graph::DiGraph;
 
-    use crate::core::{BinaryOperator, Semantics};
+    use crate::Value;
+    use crate::core::{BinaryOperator, Semantics, StreamType};
     use crate::dataflow::DataflowMonitor;
     use crate::distributed::distribution_graphs::GenericDistributionGraph;
     use crate::dsrv_fixtures::{elaborated, spec_simple_add_decomposable};
     use crate::lang::dsrv::ast::Expr;
     use crate::lang::dsrv::span::strip_span_ref;
-    use crate::{TypeCheckOptions, Value};
     use proptest::prelude::*;
     use test_log::test;
 
@@ -385,21 +386,9 @@ mod tests {
     use crate::lang::dsrv::test_support::arb_boolean_dsrv_spec;
 
     fn elaborate(spec: DsrvSpecification) -> ElaboratedDsrvSpecification {
-        spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
+        spec.check_and_elaborate()
             .without_warnings()
             .expect("test specification should check")
-    }
-
-    #[test]
-    fn localisation_keeps_the_checking_policy() {
-        let source = "in x: Int\naux a: Int\nout y: Int\nout z: Int\na = x + 1\ny = a * 2\nz = x";
-        for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
-            let spec = crate::dsrv_fixtures::elaborated_with(source, options);
-            let localised = spec.try_localise(&vec![VarName::new("y")]).unwrap();
-            assert_eq!(localised.check_mode(), options.mode);
-            assert_eq!(localised.source().check_mode(), options.mode);
-            assert_eq!(localised.checked().check_mode(), options.mode);
-        }
     }
 
     #[test]
@@ -485,8 +474,8 @@ mod tests {
     #[test]
     fn localisation_reuses_the_submitted_models_checked_tree() {
         let source = "in x: Int\nout y: Int\ny = x as Int";
-        let report = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
-            .expect("the submitted model parses");
+        let report =
+            ElaboratedDsrvSpecification::parse(source).expect("the submitted model parses");
         assert_eq!(
             report
                 .warnings()
@@ -561,11 +550,7 @@ mod tests {
             .parse::<DsrvSpecification>()
             .unwrap();
 
-        assert!(
-            spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
-                .without_warnings()
-                .is_err()
-        );
+        assert!(spec.check_and_elaborate().without_warnings().is_err());
     }
 
     fn assert_specs_eq_ignoring_spans(actual: &DsrvSpecification, expected: &DsrvSpecification) {
@@ -574,7 +559,7 @@ mod tests {
         assert_eq!(actual.aux_vars, expected.aux_vars);
         assert_eq!(actual.stream_vars, expected.stream_vars);
         // Annotations are compared only where the expected specification
-        // declares them; the rest are the types gradual checking inferred.
+        // declares them; the rest are inferred concrete types.
         for (name, annotation) in &expected.type_annotations {
             assert_eq!(actual.type_annotations.get(name), Some(annotation));
         }
@@ -604,7 +589,10 @@ mod tests {
             ]
             .into_iter()
             .collect(),
-            BTreeMap::new(),
+            BTreeMap::from([
+                ("a".into(), StreamType::Bool),
+                ("b".into(), StreamType::Bool),
+            ]),
             vec![],
         );
         let restricted_vars = vec!["c".into(), "e".into()];
@@ -630,9 +618,9 @@ mod tests {
     fn test_localise_specification_2() {
         let spec = DsrvSpecification::new(
             BTreeSet::from(["a".into()]),
-            BTreeSet::from(["i".into()]),
+            BTreeSet::new(),
             BTreeMap::<VarName, Expr>::new(),
-            BTreeMap::new(),
+            BTreeMap::from([("a".into(), StreamType::Int)]),
             vec![],
         );
         let restricted_vars = vec![];
@@ -702,9 +690,9 @@ mod tests {
         // An auxiliary stream a local output reads is computed locally, as an
         // auxiliary stream; what it reads from elsewhere becomes an input.
         let spec = elaborated(
-            "   in x
-                    in y
-                    in z
+            "   in x: Int
+                    in y: Int
+                    in z: Int
                     out w
                     out v
                     aux tmp
@@ -762,10 +750,10 @@ mod tests {
 
     #[test]
     fn localisation_preserves_entry_order_and_builds_a_fresh_local_boundary() {
-        let source = "in remote\n\
+        let source = "in remote: Int\n\
                       out b\n\
                       b = helper + remote\n\
-                      in other\n\
+                      in other: Int\n\
                       aux helper\n\
                       helper = other\n\
                       out c\n\
@@ -821,7 +809,7 @@ mod tests {
             .try_localise(&vec![VarName::new("y")])
             .expect("localisation should keep h");
         let root = localised.var_expr_ref(&VarName::new("y")).unwrap();
-        assert_eq!(root.typ(), &TCType::Float);
+        assert_eq!(root.typ(), &StreamType::Float);
         assert_eq!(root.expr().to_string(), "(if (h > 0) then 1.5 else 2.5)");
         for name in ["h", "y"] {
             let name = VarName::new(name);
@@ -876,7 +864,7 @@ mod tests {
     #[test]
     fn localisation_keeps_a_transitive_chain_of_aux_streams() {
         let spec = elaborated(
-            "in i\nin unused\nout result\nout other\naux h1\naux h2\naux h3\naux far\n\
+            "in i: Int\nin unused: Int\nout result\nout other\naux h1\naux h2\naux h3\naux far\n\
              h1 = i\nh2 = h1 + 1\nh3 = h2 + 2\nfar = unused\nresult = h3\nother = far",
         );
         let localised = spec.try_localise(&vec![VarName::new("result")]).unwrap();
@@ -971,11 +959,7 @@ mod tests {
             vec![h1, h2],
         );
 
-        assert!(
-            spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
-                .without_warnings()
-                .is_err()
-        );
+        assert!(spec.check_and_elaborate().without_warnings().is_err());
     }
 
     #[test]
@@ -990,11 +974,7 @@ mod tests {
             [missing.clone()],
         );
 
-        assert!(
-            spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
-                .without_warnings()
-                .is_err()
-        );
+        assert!(spec.check_and_elaborate().without_warnings().is_err());
     }
 
     #[test]
@@ -1060,7 +1040,7 @@ mod tests {
                 ),
                 ("elsewhere".into(), Expr::Var("input".into())),
             ]),
-            BTreeMap::new(),
+            BTreeMap::from([("input".into(), StreamType::Bool)]),
             [helper.clone()],
         );
         let elaborated = elaborate(spec);
@@ -1087,16 +1067,15 @@ mod tests {
             spec in arb_boolean_dsrv_spec(),
             restricted_vars in prop::collection::hash_set("[a-z]", 0..5)
         ) {
-            let restricted_vars: Vec<VarName> = restricted_vars.into_iter().map(|s| s.into()).collect();
-            let Ok(admitted) = spec
-                .clone()
-                .check_and_elaborate(TypeCheckOptions::GRADUAL)
-                .without_warnings()
-            else {
-                return Ok(());
-            };
+            let mut restricted_vars: Vec<VarName> = restricted_vars.into_iter().map(|s| s.into()).collect();
+            let first_output = spec.output_vars.iter().next().expect("concrete generator supplies roots").clone();
+            restricted_vars.push(first_output.clone());
+            let admitted = spec.clone().check_and_elaborate().without_warnings()
+                .expect("every generated concrete Boolean specification must check");
             let localised_spec = admitted.try_localise(&restricted_vars).unwrap();
             let localised_spec = tree(&localised_spec);
+            prop_assert!(localised_spec.output_vars.contains(&first_output));
+            prop_assert!(!localised_spec.exprs.is_empty(), "every case reaches nonempty localisation");
 
             for var in localised_spec.output_vars.iter() {
                 assert!(restricted_vars.contains(var));

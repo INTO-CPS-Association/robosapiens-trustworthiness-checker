@@ -505,7 +505,7 @@ mod tests {
 
     fn scheduler_constraint_spec() -> ElaboratedDsrvSpecification {
         let src = r#"language distributed
-in gate
+in gate: Bool
 out work
 out distX
 work = gate

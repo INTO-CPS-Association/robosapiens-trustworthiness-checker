@@ -90,7 +90,6 @@ impl Display for ExprRef<'_> {
             Ascribe(value, target) => write!(f, "({value}: {target})"),
             // A run-time check is not written by anyone, so it prints as the
             // value it checks.
-            Check(value, _, _) => write!(f, "{value}"),
             If(cond, yes, no) => write!(f, "(if {} then {} else {})", cond, yes, no),
             SIndex(var, index) => write!(f, "{var}[{index}]"),
             Not(expr) => write!(f, "!{expr}"),
@@ -303,7 +302,7 @@ fn fmt_specification<'a>(
 mod tests {
     use super::*;
     use crate::lang::dsrv::parser::parse_expr;
-    use crate::{TypeCheckOptions, VarName, core::StreamType};
+    use crate::{VarName, core::StreamType};
 
     #[test]
     fn power_display_parenthesizes_direct_negative_value_bases() {
@@ -348,7 +347,7 @@ mod tests {
 
     #[test]
     fn checked_display_uses_inferred_annotation_projection() {
-        let checked = crate::dsrv_fixtures::checked_with("out y\ny = 1", TypeCheckOptions::GRADUAL);
+        let checked = crate::dsrv_fixtures::checked("out y\ny = 1");
 
         assert_eq!(
             checked.type_annotation(&VarName::new("y")),

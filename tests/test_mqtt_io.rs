@@ -166,9 +166,8 @@ mod integration_tests {
 
         let async_monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate(
                 spec.clone(),
-                Semantics::Untimed,
             ))
             .input(input_stream)
             .output_pipeline(mqtt_output_pipeline(mqtt_port, mqtt_topic))
@@ -213,9 +212,8 @@ mod integration_tests {
 
         let async_monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate(
                 spec.clone(),
-                Semantics::Untimed,
             ))
             .input(input_stream)
             .output_pipeline(mqtt_output_pipeline(mqtt_port, mqtt_topics))
@@ -681,9 +679,8 @@ mod integration_tests {
 
         let monitor: Box<dyn Runtime> = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate(
                 spec.clone(),
-                semantics,
             ))
             .input(input_stream)
             .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(
@@ -802,9 +799,9 @@ echoed = payload
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         let spec = r#"
-in payload
-out selected
-out echoed
+in payload: Map<Int>
+out selected: Int
+out echoed: Map<Int>
 selected = Map.get(payload, "x")
 echoed = payload
 "#;
@@ -995,14 +992,9 @@ mod reconf_tests {
             OutputPipeline::from_backend(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .prepare_replacement(replacement_preparation(
-                    trustworthiness_checker::TypeCheckOptions::GRADUAL,
-                ))
+                .prepare_replacement(replacement_preparation())
                 .executor(executor.clone())
-                .model(elaborate_for(
-                    spec.clone(),
-                    trustworthiness_checker::core::Semantics::Untimed,
-                ))
+                .model(elaborate(spec.clone()))
                 .input_pipeline(InputPipeline::new(input_source))
                 .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
@@ -1221,14 +1213,9 @@ mod reconf_tests {
             OutputPipeline::from_backend(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .prepare_replacement(replacement_preparation(
-                    trustworthiness_checker::TypeCheckOptions::GRADUAL,
-                ))
+                .prepare_replacement(replacement_preparation())
                 .executor(executor.clone())
-                .model(elaborate_for(
-                    spec.clone(),
-                    trustworthiness_checker::core::Semantics::Untimed,
-                ))
+                .model(elaborate(spec.clone()))
                 .input_pipeline(InputPipeline::new(input_source))
                 .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
@@ -1409,7 +1396,7 @@ mod reconf_dataflow_mqtt_tests {
     const OUT_A: &str = "reconf-dataflow/output-a";
     const OUT_B: &str = "reconf-dataflow/output-b";
     const CONTROL_TOPIC: &str = "reconf-dataflow/control";
-    const SPECIFICATION: &str = "in x\nout z\nz = x";
+    const SPECIFICATION: &str = "in x: Int\nout z: Int\nz = x";
 
     fn route(topic: &str) -> Route {
         Route::new(topic.to_owned().into_boxed_str(), None)
@@ -1473,21 +1460,12 @@ mod reconf_dataflow_mqtt_tests {
 
         let runtime = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
-                spec,
-                Semantics::Untimed,
-            ))
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate(spec))
             .input_pipeline(InputPipeline::new(input_source))?
             .output_pipeline(mqtt_output_pipeline(mqtt_port, protocol))
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
             .semantics(Semantics::Untimed)
-            .prepare_replacement(
-                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                    trustworthiness_checker::runtime::builder::type_check_options(
-                        Semantics::Untimed,
-                    ),
-                ),
-            )
+            .prepare_replacement(trustworthiness_checker::dsrv_fixtures::replacement_preparation())
             .reconf_topic(CONTROL_TOPIC.to_owned())
             .acknowledgements(ack_tx)
             .build()

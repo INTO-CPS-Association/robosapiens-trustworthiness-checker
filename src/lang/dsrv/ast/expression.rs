@@ -27,7 +27,7 @@ use crate::lang::dsrv::expand::functions::Callable;
 use crate::lang::dsrv::expand::language::IfPolicy;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern};
 use crate::lang::dsrv::source::SourceContext;
-use crate::lang::dsrv::source_map::{NodeOrigin, SourceLocation};
+use crate::lang::dsrv::source_map::NodeOrigin;
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::syntax::parsed::GenericFunctionSignature;
 
@@ -298,11 +298,6 @@ contiguous_tree::tree_schema! {
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Cast(value: child, target: data(StreamType)),
         Ascribe(value: child, target: data(StreamType)),
-        // A value whose checked type is `Any`, used where `target` is
-        // needed. Only elaboration builds one, where checking accepted the
-        // `Any`; a runtime stops at the first data value that is not a
-        // `target`, reporting `location`, the files that place the node.
-        Check(value: child, target: data(StreamType), location: data(SourceLocation)),
         Var(variable: data(VarName)),
         // A constructor before elaboration resolves it: a tag, the payload it
         // is given (none for a nullary alternative), and the union named by a

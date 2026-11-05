@@ -30,8 +30,7 @@ accepts only a model validated for local execution.
 
 The supported language modes are `Local` and `Distributed`. Local validation
 rejects distributed-only expressions such as `Dist` and `MonitoredAt`;
-distributed validation permits them. Strict and gradual type checking are
-separate from this choice.
+distributed validation permits them. Type checking is separate from this language-mode choice.
 
 The parsed specification retains declaration and assignment order in one
 semantic statement sequence. Membership sets and the expression map remain
@@ -60,7 +59,7 @@ flowchart TB
     program["DataflowProgram"]
     parsed -->|"common + Local validation"| local
     parsed -->|"common + Distributed validation; optional checking"| dist
-    local -->|"strict or gradual checking"| checked
+    local -->|"type checking"| checked
     dist -->|"planning and fallible localisation"| node
     node -->|"fresh common + Local validation"| local
     local -->|"untyped compilation consumes proof"| program

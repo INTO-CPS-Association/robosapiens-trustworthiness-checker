@@ -26,12 +26,10 @@ use tc_core::io::{
 
 use tc_core::io::channel::IntegrationInput;
 use tc_core::lang::dsrv::diagnostics::{SemanticErrors, SemanticWarning as CoreSemanticWarning};
-use tc_core::runtime::builder::{GeneralRuntimeBuilder, prepare_replacement, type_check_options};
+use tc_core::runtime::builder::{GeneralRuntimeBuilder, prepare_replacement};
 use tc_core::semantics::CausalRuntimeBuilder;
 use tc_core::stream_utils::{Fanout, FanoutSender};
-use tc_core::{
-    DsrvSpecification, ElaboratedDsrvSpecification, InputUpdate, TypeCheckOptions, Value, VarName,
-};
+use tc_core::{DsrvSpecification, ElaboratedDsrvSpecification, InputUpdate, Value, VarName};
 
 pyo3::create_exception!(
     trustworthiness_checker,
@@ -83,19 +81,6 @@ enum RuntimeMode {
     ReferenceCausalSet,
     RoleCausalSet,
     RoleCausalAntichain,
-}
-
-impl RuntimeMode {
-    /// The policy the model is checked with. The causal runtimes evaluate
-    /// without consulting types, as `untimed` does, and are checked as it is.
-    fn type_check_options(&self) -> TypeCheckOptions {
-        match self {
-            RuntimeMode::Ordinary(semantics) => type_check_options(*semantics),
-            RuntimeMode::ReferenceCausalSet
-            | RuntimeMode::RoleCausalSet
-            | RuntimeMode::RoleCausalAntichain => type_check_options(Semantics::Untimed),
-        }
-    }
 }
 
 enum RuntimeOutputs {
@@ -433,7 +418,7 @@ fn parse_semantics(semantics: &str) -> PyResult<RuntimeMode> {
         "typed" | "typed-untimed" => Ok(RuntimeMode::Ordinary(Semantics::TypedUntimed)),
         "untyped" | "untimed" => Ok(RuntimeMode::Ordinary(Semantics::Untimed)),
         "gradual" | "gradual-typed" | "gradual-typed-untimed" => {
-            Ok(RuntimeMode::Ordinary(Semantics::GradualTypedUntimed))
+            Ok(RuntimeMode::Ordinary(Semantics::TypedUntimed))
         }
         "causal" | "causal-set" => Ok(RuntimeMode::ReferenceCausalSet),
         "role-causal-set" => Ok(RuntimeMode::RoleCausalSet),
@@ -515,9 +500,7 @@ impl TcRuntime {
                 "example model could not be parsed: {err:?}"
             ))
         })?;
-        let (checked, warnings) = spec
-            .check_and_elaborate(semantics.type_check_options())
-            .into_parts();
+        let (checked, warnings) = spec.check_and_elaborate().into_parts();
         let warnings = warnings_tuple(py, &warnings)?;
         let spec = checked
             .map_err(|errors| semantic_analysis_error(py, &errors, warnings.clone_ref(py)))?;
@@ -641,7 +624,6 @@ fn build_runtime(
                         receiver.recv().await.map(|output| (output, receiver))
                     },
                 ));
-                let options = type_check_options(semantics);
                 let monitor = GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new()
                     .executor(runtime_executor.clone())
                     .model(spec)
@@ -650,7 +632,7 @@ fn build_runtime(
                         sender,
                     )))
                     .prepare_replacement(move |source| {
-                        prepare_replacement(source, options, |_| Ok(()))
+                        prepare_replacement(source, |_| Ok(()))
                     })
                     .reconf_topic(RECONF_INPUT.to_owned())
                     .runtime(runtime)

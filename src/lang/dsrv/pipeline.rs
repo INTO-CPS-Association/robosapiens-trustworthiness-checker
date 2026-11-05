@@ -8,45 +8,22 @@ use std::cell::Cell;
 use super::{
     ast::{CheckedDsrvSpecification, DsrvSpecification, ValidatedDsrvSpecification},
     diagnostics::{SemanticAnalysisReport, SemanticResult},
-    parser, type_checker,
+    parser, type_checker, validation,
 };
 
 #[cfg(test)]
 thread_local! {
-    static PIPELINE_COUNTS: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+    static PIPELINE_COUNTS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
 }
 
 #[cfg(test)]
 pub(crate) fn reset_test_pipeline_counts() {
-    PIPELINE_COUNTS.with(|counts| counts.set((0, 0, 0)));
+    PIPELINE_COUNTS.with(|counts| counts.set((0, 0)));
 }
 
 #[cfg(test)]
-pub(crate) fn test_pipeline_counts() -> (usize, usize, usize) {
+pub(crate) fn test_pipeline_counts() -> (usize, usize) {
     PIPELINE_COUNTS.with(Cell::get)
-}
-
-/// Type-inference policy used when checking a DSRV specification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TypeCheckMode {
-    Strict,
-    Gradual,
-}
-
-/// Options controlling semantic validation and type checking.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TypeCheckOptions {
-    pub mode: TypeCheckMode,
-}
-
-impl TypeCheckOptions {
-    pub const STRICT: Self = Self {
-        mode: TypeCheckMode::Strict,
-    };
-
-    pub const GRADUAL: Self = Self {
-        mode: TypeCheckMode::Gradual,
-    };
 }
 
 impl FromStr for DsrvSpecification {
@@ -55,8 +32,8 @@ impl FromStr for DsrvSpecification {
     fn from_str(source: &str) -> Result<Self, Self::Err> {
         #[cfg(test)]
         PIPELINE_COUNTS.with(|counts| {
-            let (parse, strict, gradual) = counts.get();
-            counts.set((parse + 1, strict, gradual));
+            let (parse, check) = counts.get();
+            counts.set((parse + 1, check));
         });
         parser::parse_str(source)
     }
@@ -66,72 +43,48 @@ impl DsrvSpecification {
     /// Check the invariants every specification must satisfy, whatever the
     /// checking policy. This neither infers types nor warns.
     pub fn validate(self) -> SemanticResult<ValidatedDsrvSpecification> {
-        type_checker::validate(self)
+        validation::validate(self)
     }
 
-    /// Semantically check this specification using the requested policy,
-    /// reporting its errors or the checked specification together with any
-    /// warnings.
-    pub fn check(
-        self,
-        options: TypeCheckOptions,
-    ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
+    /// Check this specification and report errors or its concrete types and warnings.
+    pub fn check(self) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
         #[cfg(test)]
         PIPELINE_COUNTS.with(|counts| {
-            let (parse, strict, gradual) = counts.get();
-            counts.set(match options.mode {
-                TypeCheckMode::Strict => (parse, strict + 1, gradual),
-                TypeCheckMode::Gradual => (parse, strict, gradual + 1),
-            });
+            let (parse, check) = counts.get();
+            counts.set((parse, check + 1));
         });
-        match options.mode {
-            TypeCheckMode::Strict => type_checker::type_check(self),
-            TypeCheckMode::Gradual => type_checker::type_check_gradual(self),
-        }
+        type_checker::type_check(self)
     }
 }
 
 impl ValidatedDsrvSpecification {
-    /// Semantically check this validated specification using the requested
-    /// policy.
-    pub fn check(
-        self,
-        options: TypeCheckOptions,
-    ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
-        match options.mode {
-            TypeCheckMode::Strict => type_checker::type_check(self.into_specification()),
-            TypeCheckMode::Gradual => type_checker::type_check_gradual(self.into_specification()),
-        }
+    /// Check this validated specification.
+    pub fn check(self) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
+        self.into_specification().check()
     }
 }
 
 impl CheckedDsrvSpecification {
-    /// Parse and check a specification using the requested policy. A parse
-    /// failure stops before checking; otherwise the check is reported.
-    pub fn parse_with(
-        source: &str,
-        options: TypeCheckOptions,
-    ) -> Result<SemanticAnalysisReport<Self>, parser::DsrvParseError> {
-        Ok(source.parse::<DsrvSpecification>()?.check(options))
+    /// Parse and check a specification, keeping parse and semantic errors distinct.
+    pub fn parse(source: &str) -> Result<SemanticAnalysisReport<Self>, parser::DsrvParseError> {
+        Ok(source.parse::<DsrvSpecification>()?.check())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::StreamType;
     use crate::{
         VarName,
         dsrv_fixtures::WithoutWarnings,
-        lang::dsrv::{ast::Declaration, diagnostics::SemanticError, type_checker::TCType},
+        lang::dsrv::{ast::Declaration, diagnostics::SemanticError},
     };
 
     /// Parse and check `source`, which must parse and must not warn.
     #[track_caller]
-    fn checked(
-        source: &str,
-        options: TypeCheckOptions,
-    ) -> SemanticResult<CheckedDsrvSpecification> {
-        CheckedDsrvSpecification::parse_with(source, options)
+    fn checked(source: &str) -> SemanticResult<CheckedDsrvSpecification> {
+        CheckedDsrvSpecification::parse(source)
             .unwrap_or_else(|errors| panic!("{source}: {errors:?}"))
             .without_warnings()
     }
@@ -148,79 +101,15 @@ mod tests {
     }
 
     #[test]
-    fn operations_on_dynamic_values_are_checked_at_run_time() {
-        // Each operation on a value of type `Any` gives the type the value
-        // does not determine statically.
-        let cases = [
-            ("out y = Map.get(v, \"k\")", TCType::Any),
-            ("out y = v.field", TCType::Any),
-            ("out y = List.get(v, 0)", TCType::Any),
-            ("out y = List.head(v)", TCType::Any),
-            ("out y = List.tail(v)", TCType::Any),
-            ("out y = List.len(v)", TCType::Int),
-            ("out y = List.append(v, 1)", TCType::Any),
-            ("out y = Map.insert(v, \"k\", 1)", TCType::Any),
-            ("out y = Map.remove(v, \"k\")", TCType::Any),
-            ("out y = Map.has_key(v, \"k\")", TCType::Bool),
-            (
-                "out y = List.map(\\x -> x, v)",
-                TCType::List(Box::new(TCType::Any)),
-            ),
-            ("out y = v(1)", TCType::Any),
-            ("out y = partial(v, 1)", TCType::Any),
-        ];
-        for (equation, expected) in cases {
-            // Unannotated, under gradual checking.
-            let source = format!("in v\n{equation}");
-            let specification = checked(&source, TypeCheckOptions::GRADUAL)
-                .unwrap_or_else(|errors| panic!("{source}: {errors:?}"));
-            assert_eq!(
-                specification
-                    .var_expr_ref(&VarName::new("y"))
-                    .unwrap()
-                    .typ(),
-                &expected,
-                "{source}"
-            );
-            // Written as `Any`, under strict checking.
-            let annotated = format!(
-                "in v: Any\n{}",
-                equation.replacen("out y", &format!("out y: {}", source_type(&expected)), 1)
-            );
-            checked(&annotated, TypeCheckOptions::STRICT)
-                .unwrap_or_else(|errors| panic!("{annotated}: {errors:?}"));
-        }
-        // A value with a known type that is not a collection is still an error.
-        assert!(
-            checked(
-                "in v: Int\nout y: Int = List.len(v)",
-                TypeCheckOptions::STRICT
-            )
-            .is_err()
-        );
-    }
-
-    fn source_type(typ: &TCType) -> &'static str {
-        match typ {
-            TCType::Any => "Any",
-            TCType::Int => "Int",
-            TCType::Bool => "Bool",
-            TCType::List(_) => "List<Any>",
-            other => panic!("no source spelling for {other}"),
-        }
-    }
-
-    #[test]
     fn struct_equality_needs_operands_of_the_same_struct_type() {
-        let strict = |source: &str| checked(source, TypeCheckOptions::STRICT);
-        strict("in a: Struct<x: Int>\nin b: Struct<x: Int>\nout same: Bool = a == b").unwrap();
-        strict("in n: Int\nout same: Bool = {x: n, y: 2} != {y: 2, x: 1}").unwrap();
+        checked("in a: Struct<x: Int>\nin b: Struct<x: Int>\nout same: Bool = a == b").unwrap();
+        checked("in n: Int\nout same: Bool = {x: n, y: 2} != {y: 2, x: 1}").unwrap();
         for source in [
             "in n: Int\nout same: Bool = {x: 1} == {x: \"a\"}",
             "in n: Int\nout same: Bool = {x: 1} == {x: 1, y: 2}",
             "in n: Int\nout same: Bool = {x: 1} == n",
         ] {
-            let Err(errors) = strict(source) else {
+            let Err(errors) = checked(source) else {
                 panic!("{source} must not type check");
             };
             assert!(
@@ -234,38 +123,36 @@ mod tests {
 
     #[test]
     fn lambda_parameter_types_are_inferred_from_their_context() {
-        let strict = |source: &str| {
-            checked(source, TypeCheckOptions::STRICT)
-                .unwrap_or_else(|errors| panic!("{source}: {errors:?}"))
-        };
+        let require_checked =
+            |source: &str| checked(source).unwrap_or_else(|errors| panic!("{source}: {errors:?}"));
         for (source, output, expected) in [
             (
                 "in xs: List<Int>\nout ys: List<Int> = List.map(\\x -> x + 1, xs)",
                 "ys",
-                TCType::List(Box::new(TCType::Int)),
+                StreamType::List(Box::new(StreamType::Int)),
             ),
             (
                 "in xs: List<Int>\nout ys: List<Int> = List.filter(\\x -> x > 0, xs)",
                 "ys",
-                TCType::List(Box::new(TCType::Int)),
+                StreamType::List(Box::new(StreamType::Int)),
             ),
             (
                 "in xs: List<Int>\nout s: Int = List.fold(\\acc, x -> acc + x, 0, xs)",
                 "s",
-                TCType::Int,
+                StreamType::Int,
             ),
             (
                 "in x: Int\nout y: Int = (\\n -> n * 2)(x)",
                 "y",
-                TCType::Int,
+                StreamType::Int,
             ),
             (
                 "in x: Float\nout y: Float = (\\n, m -> n + m)(x, 1.5)",
                 "y",
-                TCType::Float,
+                StreamType::Float,
             ),
         ] {
-            let checked = strict(source);
+            let checked = require_checked(source);
             assert_eq!(
                 checked.var_expr_ref(&VarName::new(output)).unwrap().typ(),
                 &expected,
@@ -274,33 +161,18 @@ mod tests {
         }
 
         // Annotations still win, and must agree with the context.
-        strict("in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Int -> x + 1, xs)");
+        require_checked("in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Int -> x + 1, xs)");
         assert!(
-            checked(
-                "in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Str -> 1, xs)",
-                TypeCheckOptions::STRICT,
-            )
-            .is_err()
+            checked("in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Str -> 1, xs)",).is_err()
         );
     }
 
     #[test]
-    fn a_lambda_parameter_without_annotation_or_context_is_strict_error_and_gradual_any() {
+    fn a_lambda_parameter_without_context_requests_an_annotation() {
         // A lambda stored in a list is checked with nothing to infer from.
         let source = "in x: Int\nout y: Int = List.len(List(\\f -> 1))";
-        let Err(errors) = checked(source, TypeCheckOptions::STRICT) else {
-            panic!("strict checking must reject an uninferable parameter");
-        };
-        assert!(
-            errors.iter().any(|error| matches!(
-                error,
-                SemanticError::MissingTypeAnnotation(message, Some(_), _)
-                    if message.contains("lambda parameter `f`")
-            )),
-            "{errors:?}"
-        );
-        checked(source, TypeCheckOptions::GRADUAL)
-            .expect("gradual checking gives the parameter the dynamic type");
+
+        assert!(checked(source).is_err());
     }
 
     #[test]
@@ -317,7 +189,7 @@ mod tests {
         let report = "in x: Int\nout y: Int\ny = x + 1"
             .parse::<DsrvSpecification>()
             .unwrap()
-            .check(TypeCheckOptions::STRICT);
+            .check();
         assert!(report.warnings().is_empty());
         let (specification, warnings) = report.into_parts();
         assert!(warnings.is_empty());
@@ -327,76 +199,70 @@ mod tests {
                 .var_expr_ref(&VarName::new("y"))
                 .unwrap()
                 .typ(),
-            &TCType::Int
+            &StreamType::Int
         );
         let report = "in x\nout y\ny = x + 1"
             .parse::<DsrvSpecification>()
             .unwrap()
-            .check(TypeCheckOptions::STRICT);
+            .check();
         assert!(report.warnings().is_empty());
         assert!(report.result().is_err());
     }
 
     #[test]
-    fn every_check_entry_point_records_its_policy_and_elaboration_keeps_it() {
-        let source = "in x: Int\nout y: Int\ny = x + 1";
-        for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
-            let spec = source.parse::<DsrvSpecification>().unwrap();
-            let direct = spec.clone().check(options).without_warnings().unwrap();
-            assert_eq!(direct.check_mode(), options.mode);
-            let validated = spec.clone().validate().unwrap();
-            let validated = validated.check(options).without_warnings().unwrap();
-            assert_eq!(validated.check_mode(), options.mode);
-            let parsed = checked(source, options).unwrap();
-            assert_eq!(parsed.check_mode(), options.mode);
-
-            let elaborated = parsed.elaborate();
-            assert_eq!(elaborated.check_mode(), options.mode);
-            assert_eq!(elaborated.source().check_mode(), options.mode);
-            assert_eq!(elaborated.checked().check_mode(), options.mode);
-            let elaborated = spec
-                .check_and_elaborate(options)
-                .without_warnings()
-                .unwrap();
-            assert_eq!(elaborated.check_mode(), options.mode);
-            let parsed = crate::ElaboratedDsrvSpecification::parse_with(source, options)
-                .unwrap()
-                .without_warnings()
-                .unwrap();
-            assert_eq!(parsed.check_mode(), options.mode);
-            // The policy is not part of the printed specification.
+    fn every_check_entry_point_produces_the_same_concrete_type() {
+        let source = "in x:Int\nout y=x+1";
+        let spec = source.parse::<DsrvSpecification>().unwrap();
+        let direct = spec.clone().check().without_warnings().unwrap();
+        let validated = spec
+            .clone()
+            .validate()
+            .unwrap()
+            .check()
+            .without_warnings()
+            .unwrap();
+        let parsed = checked(source).unwrap();
+        for checked in [direct, validated, parsed] {
             assert_eq!(
-                parsed.to_string(),
-                source.parse::<DsrvSpecification>().unwrap().to_string()
+                checked.var_expr_ref(&"y".into()).unwrap().typ(),
+                &StreamType::Int
+            );
+            assert_eq!(
+                checked.elaborate().var_expr_ref(&"y".into()).unwrap().typ(),
+                &StreamType::Int
             );
         }
+        let elaborated = spec.check_and_elaborate().without_warnings().unwrap();
+        let parsed = crate::ElaboratedDsrvSpecification::parse(source)
+            .unwrap()
+            .without_warnings()
+            .unwrap();
+        assert_eq!(parsed.to_string(), elaborated.to_string());
     }
 
     #[test]
-    fn parse_with_supports_gradual_checking() {
-        let specification = checked("in x\nout y\ny = x + 1", TypeCheckOptions::GRADUAL).unwrap();
+    fn parse_infers_concrete_output_types() {
+        let specification = checked("in x:Int\nout y\ny = x + 1").unwrap();
 
         assert_eq!(
             specification
                 .var_expr_ref(&VarName::new("y"))
                 .unwrap()
                 .typ(),
-            &TCType::Int
+            &StreamType::Int
         );
     }
 
     #[test]
     fn checked_source_facade_keeps_parse_and_semantic_errors_distinct() {
-        assert!(
-            CheckedDsrvSpecification::parse_with("out y\ny = ", TypeCheckOptions::STRICT).is_err()
-        );
-        let semantic = checked("out y\ny = missing", TypeCheckOptions::STRICT)
+        assert!(CheckedDsrvSpecification::parse("out y\ny = ").is_err());
+        let semantic = checked("out y\ny = missing")
             .expect_err("undeclared references must fail common admission");
         assert!(semantic.iter().any(|error| matches!(
             error,
             SemanticError::UndeclaredVariable(message, _, _) if message.contains("missing")
         )));
-        let type_error = checked("out y: Bool\ny = 1", TypeCheckOptions::STRICT)
+        let type_error = checked("out y: Bool\ny = 1")
             .expect_err("well-formed but ill-typed source must reach type checking");
         assert!(
             type_error
@@ -458,13 +324,13 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_declarations_fail_common_validation_in_both_modes() {
+    fn duplicate_declarations_fail_validation_and_checking() {
         let specification = "in z: Int\nout a: Int\nin z: Bool\na = z"
             .parse::<DsrvSpecification>()
             .unwrap();
         for errors in [
             specification.clone().validate().unwrap_err(),
-            specification.validate().unwrap_err(),
+            specification.check().into_parts().0.unwrap_err(),
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,
@@ -505,73 +371,34 @@ mod tests {
 
     #[test]
     fn validation_and_typechecking_cover_the_local_distributed_mode_matrix() {
-        let annotated = "in x: Int\nout y: Int\ny = x + 1"
-            .parse::<DsrvSpecification>()
-            .unwrap();
-        for mode in [TypeCheckMode::Strict, TypeCheckMode::Gradual] {
-            let local = annotated
-                .clone()
+        for source in [
+            "in x:Int\nout y:Int=x+1",
+            "language distributed\nin x:Int\nout y=x+1",
+        ] {
+            let validated = source
+                .parse::<DsrvSpecification>()
+                .unwrap()
                 .validate()
-                .expect("annotated local model should validate");
-            let local_checked = local
-                .check(TypeCheckOptions { mode })
-                .without_warnings()
-                .expect("annotated local model should type-check");
+                .unwrap();
+            let checked = validated.check().without_warnings().unwrap();
             assert_eq!(
-                local_checked
-                    .var_expr_ref(&VarName::new("y"))
-                    .unwrap()
-                    .typ(),
-                &TCType::Int
-            );
-
-            let distributed = annotated
-                .clone()
-                .validate()
-                .expect("ordinary model should validate in distributed mode");
-            let distributed_checked = distributed
-                .check(TypeCheckOptions { mode })
-                .without_warnings()
-                .expect("ordinary model should type-check in distributed mode");
-            assert_eq!(
-                distributed_checked
-                    .var_expr_ref(&VarName::new("y"))
-                    .unwrap()
-                    .typ(),
-                &TCType::Int
+                checked.var_expr_ref(&"y".into()).unwrap().typ(),
+                &StreamType::Int
             );
         }
-
-        let unannotated = "in x\nout y\ny = x + 1"
+        let bare = "in x\nout y=x+1"
             .parse::<DsrvSpecification>()
+            .unwrap()
+            .validate()
             .unwrap();
-        let local = unannotated.clone().validate().unwrap();
-        local
-            .clone()
-            .check(TypeCheckOptions::GRADUAL)
-            .without_warnings()
-            .expect("gradual inference should accept arithmetic");
         assert!(
-            local.check(TypeCheckOptions::STRICT).result().is_err(),
-            "strict checking must not be implied by semantic validity"
-        );
-        let distributed = unannotated.validate().unwrap();
-        distributed
-            .clone()
-            .check(TypeCheckOptions::GRADUAL)
-            .without_warnings()
-            .expect("gradual inference should accept arithmetic");
-        assert!(
-            distributed
-                .check(TypeCheckOptions::STRICT)
-                .result()
-                .is_err(),
-            "strict checking must not be implied by semantic validity"
+            bare.check().result().is_err(),
+            "valid scope does not provide an input type"
         );
     }
 
     #[test]
-    fn common_validation_errors_are_mode_independent_and_visit_all_roots() {
+    fn validation_errors_are_preserved_by_checking_and_visit_all_roots() {
         fn duplicate(error: &SemanticError) -> bool {
             matches!(error, SemanticError::DuplicateDeclaration { variable, .. }
                 if *variable == VarName::new("z"))
@@ -598,14 +425,14 @@ mod tests {
         for (source, expected) in cases {
             let specification = source.parse::<DsrvSpecification>().unwrap();
             let local_errors = specification.clone().validate().unwrap_err();
-            let distributed_errors = specification.validate().unwrap_err();
+            let checking_errors = specification.check().into_parts().0.unwrap_err();
             assert!(
                 local_errors.iter().any(expected),
                 "local errors: {local_errors:?}"
             );
             assert!(
-                distributed_errors.iter().any(expected),
-                "distributed errors: {distributed_errors:?}"
+                checking_errors.iter().any(expected),
+                "checking errors: {checking_errors:?}"
             );
         }
 

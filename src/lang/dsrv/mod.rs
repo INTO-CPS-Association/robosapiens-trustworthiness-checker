@@ -1,4 +1,4 @@
-//! DSRV syntax, parsers, and type checking.
+//! DSRV syntax, parsing, validation and type checking.
 
 pub mod ast;
 pub mod catalogue;
@@ -18,6 +18,7 @@ pub mod source_map;
 pub mod span;
 mod syntax;
 pub mod type_checker;
+pub mod validation;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -29,6 +30,5 @@ pub use expand::language::{
     CoreDsrvSpecification, Dialect, Feature, IfPolicy, LanguageConfig, LanguageError, MetaFeature,
 };
 pub use parser::{DsrvParseError, check_core_source};
-pub use pipeline::{TypeCheckMode, TypeCheckOptions};
 #[cfg(test)]
 pub(crate) use pipeline::{reset_test_pipeline_counts, test_pipeline_counts};

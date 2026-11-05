@@ -6,11 +6,11 @@
 
 use super::super::ir::*;
 use super::super::*;
+use crate::core::StreamType;
 use crate::core::UnaryOperator;
 use crate::lang::dsrv::ast::{CheckedExpr, CheckedExprRef, ExprView};
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
 use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
-use crate::lang::dsrv::type_checker::TCType;
 
 struct EvaluationGraphBuilder {
     nodes: Vec<UnboundOp>,
@@ -32,7 +32,7 @@ impl EvaluationGraphBuilder {
     }
 
     /// The elaborated type of `expr`, where this graph specialises on types.
-    fn scalar_typ<'a>(&self, expr: CheckedExprRef<'a>) -> Option<&'a TCType> {
+    fn scalar_typ<'a>(&self, expr: CheckedExprRef<'a>) -> Option<&'a StreamType> {
         self.specialise.then(|| expr.typ())
     }
 
@@ -134,15 +134,6 @@ fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuild
             builder.push(UnboundOp::Ascribe {
                 input,
                 target: target.clone(),
-            })
-        }
-        Check(value, target, location) => {
-            let input = lower_expression(value, builder);
-            builder.push(UnboundOp::Check {
-                input,
-                target: target.clone(),
-                span: expr.expr().span(),
-                location: location.clone(),
             })
         }
         Not(arg) => lower_unary(builder, UnaryOperator::Not, arg, result_kind),
@@ -436,17 +427,17 @@ fn lower_unary(
     builder.push_with_signature(UnboundOp::Unary { op, arg }, signature)
 }
 
-fn scalar_kind(typ: Option<&TCType>) -> Option<ScalarKind> {
+fn scalar_kind(typ: Option<&StreamType>) -> Option<ScalarKind> {
     match typ? {
-        TCType::Int => Some(ScalarKind::Int),
-        TCType::Float => Some(ScalarKind::Float),
-        TCType::Bool => Some(ScalarKind::Bool),
+        StreamType::Int => Some(ScalarKind::Int),
+        StreamType::Float => Some(ScalarKind::Float),
+        StreamType::Bool => Some(ScalarKind::Bool),
         _ => None,
     }
 }
 
 fn scalar_unary_signature(
-    input: Option<&TCType>,
+    input: Option<&StreamType>,
     output: Option<ScalarKind>,
 ) -> Option<ScalarSignature> {
     Some(ScalarSignature::Unary {
@@ -456,8 +447,8 @@ fn scalar_unary_signature(
 }
 
 fn scalar_binary_signature(
-    left: Option<&TCType>,
-    right: Option<&TCType>,
+    left: Option<&StreamType>,
+    right: Option<&StreamType>,
     output: Option<ScalarKind>,
 ) -> Option<ScalarSignature> {
     Some(ScalarSignature::Binary {

@@ -1,6 +1,6 @@
-in x
-in y
-in z
+in x: Int
+in y: Int
+in z: Int
 out w
 out v
 w = x + y

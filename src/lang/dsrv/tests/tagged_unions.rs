@@ -13,9 +13,7 @@ use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification, ExprVi
 use crate::lang::dsrv::diagnostics::{SemanticError, TypeErrorKind, UnresolvedTypeKind};
 use crate::lang::dsrv::parser::{DsrvParseError, check_core_source, parse_str};
 use crate::lang::dsrv::path::TypePath;
-use crate::lang::dsrv::pipeline::TypeCheckOptions;
 use crate::lang::dsrv::source::TypeName;
-use crate::lang::dsrv::type_checker::TCType;
 
 use test_log::test;
 
@@ -34,20 +32,20 @@ fn language_error(source: &str) -> LanguageError {
 
 fn check(source: &str) -> CheckedDsrvSpecification {
     parse(source)
-        .check(TypeCheckOptions::GRADUAL)
+        .check()
         .without_warnings()
         .unwrap_or_else(|errors| panic!("{source}: {errors:?}"))
 }
 
 fn check_err(source: &str) -> Vec<SemanticError> {
     parse(source)
-        .check(TypeCheckOptions::GRADUAL)
+        .check()
         .without_warnings()
         .err()
         .unwrap_or_else(|| panic!("{source}: expected checking to fail"))
 }
 
-fn type_of(checked: &CheckedDsrvSpecification, name: &str) -> TCType {
+fn type_of(checked: &CheckedDsrvSpecification, name: &str) -> StreamType {
     checked
         .var_expr_ref(&VarName::from(name))
         .unwrap_or_else(|| panic!("{name} is defined"))
@@ -332,7 +330,7 @@ fn a_tag_shared_by_two_unions_resolves_to_the_expected_one() {
 fn a_bare_constructor_needs_something_to_resolve_against() {
     let errors = check_err(&format!(
         "{HEADER}type State = Union<Stopped, Moving: Int>\n\
-         out y: Any\ny = Stopped\n"
+         out y\ny = Stopped\n"
     ));
     let error = &errors[0];
     assert!(
@@ -394,7 +392,7 @@ fn elaboration_keeps_a_resolved_constructor() {
         "{HEADER}type State = Union<Stopped, Moving: Int>\n\
          out y: State\ny = State::Moving(3)\n"
     );
-    let elaborated = crate::dsrv_fixtures::elaborated_with(&source, TypeCheckOptions::GRADUAL);
+    let elaborated = crate::dsrv_fixtures::elaborated(&source);
     assert!(
         elaborated.to_string().contains("y = State::Moving(3)"),
         "{elaborated}"

@@ -366,21 +366,12 @@ mod integration_tests {
 
         let runtime = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
-                spec,
-                Semantics::TypedUntimed,
-            ))
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate(spec))
             .input_pipeline(InputPipeline::new(input_source))?
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
             .semantics(Semantics::TypedUntimed)
-            .prepare_replacement(
-                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                    trustworthiness_checker::runtime::builder::type_check_options(
-                        Semantics::TypedUntimed,
-                    ),
-                ),
-            )
+            .prepare_replacement(trustworthiness_checker::dsrv_fixtures::replacement_preparation())
             .acknowledgements(ack_tx)
             .build()
             .await?;

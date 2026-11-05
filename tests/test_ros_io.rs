@@ -426,21 +426,12 @@ mod integration_tests {
         let (ack_tx, mut ack_rx) = bounded::channel::<ReconfigurationAck>(1).into_split();
         let runtime = trustworthiness_checker::runtime::GeneralRuntimeBuilder::new()
             .executor(ex.clone())
-            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
-                spec,
-                Semantics::TypedUntimed,
-            ))
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate(spec))
             .input_pipeline(InputPipeline::new(input_source))?
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
             .semantics(Semantics::TypedUntimed)
-            .prepare_replacement(
-                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
-                    trustworthiness_checker::runtime::builder::type_check_options(
-                        Semantics::TypedUntimed,
-                    ),
-                ),
-            )
+            .prepare_replacement(trustworthiness_checker::dsrv_fixtures::replacement_preparation())
             .reconf_topic(control_topic.clone())
             .acknowledgements(ack_tx)
             .build()

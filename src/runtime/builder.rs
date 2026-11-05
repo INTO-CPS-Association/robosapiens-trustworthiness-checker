@@ -25,10 +25,7 @@ use crate::{
     },
     distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputPipeline, OpenedInput, OutputPipeline, mqtt::MqttProtocol},
-    lang::dsrv::{
-        ElaboratedDsrvSpecification, TypeCheckMode, TypeCheckOptions, ast::CheckedExpr,
-        diagnostics::SemanticWarning,
-    },
+    lang::dsrv::{ElaboratedDsrvSpecification, ast::CheckedExpr, diagnostics::SemanticWarning},
     lang::mstlo::MstloSpecification,
     runtime::{
         ReplacementPreparation,
@@ -276,76 +273,19 @@ impl<
     }
 }
 
-/// The checking policy a DSRV runtime with `semantics` expects its
-/// specification to have been checked with. `typed-untimed` checks strictly;
-/// the CLI's `untimed` (`GradualTypedUntimed`) and `causal` check gradually.
-/// The library-only `Untimed` reference strategy also checks gradually, then
-/// evaluates without consulting the types.
-pub fn type_check_options(semantics: Semantics) -> TypeCheckOptions {
-    match semantics {
-        Semantics::TypedUntimed => TypeCheckOptions::STRICT,
-        _ => TypeCheckOptions::GRADUAL,
-    }
-}
-
-/// Refuse a specification checked more permissively than `semantics`
-/// requires: a gradually checked specification cannot run under
-/// `typed-untimed`. A strictly checked one runs under any semantics.
-pub fn ensure_check_mode(
-    semantics: Semantics,
-    spec: &ElaboratedDsrvSpecification,
-) -> anyhow::Result<()> {
-    let required = type_check_options(semantics).mode;
-    if required == TypeCheckMode::Strict && spec.check_mode() == TypeCheckMode::Gradual {
-        anyhow::bail!(
-            "{semantics:?} semantics requires a strictly checked specification, \
-             but this one was checked gradually"
-        );
-    }
-    Ok(())
-}
-
-/// The application's preparation, with each replacement admitted as the
-/// initial specification was, whatever policy the preparation used. Nothing
-/// is rechecked.
-fn admit_replacements(
-    semantics: Semantics,
-    prepare: ReplacementPreparation<ElaboratedDsrvSpecification>,
-) -> impl Fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification> + 'static {
-    move |source| {
-        let replacement = prepare(source)?;
-        ensure_check_mode(semantics, &replacement)
-            .context("Reconfigured specification cannot run in this runtime")?;
-        Ok(replacement)
-    }
-}
-
-fn type_check_failure(options: TypeCheckOptions) -> &'static str {
-    match options.mode {
-        TypeCheckMode::Strict => "type checking",
-        TypeCheckMode::Gradual => "gradual type checking",
-    }
-}
-
 /// Parse, check and elaborate the text of a live replacement, as a
 /// [`ReplacementPreparation`] does. `present` receives the replacement's
 /// warnings once, in report order, whether or not it checked, and before the
 /// outcome is decided; a failure to present them fails the preparation.
 pub fn prepare_replacement(
     source: &str,
-    options: TypeCheckOptions,
     present: impl FnOnce(&[SemanticWarning]) -> anyhow::Result<()>,
 ) -> anyhow::Result<ElaboratedDsrvSpecification> {
-    let report = ElaboratedDsrvSpecification::parse_with(source, options)
+    let report = ElaboratedDsrvSpecification::parse(source)
         .context("Failed to parse reconfigured specification")?;
     let (result, warnings) = report.into_parts();
     present(&warnings).context("Failed to present reconfigured specification warnings")?;
-    result.map_err(|errors| {
-        anyhow::anyhow!(
-            "Reconfigured spec failed {}: {errors:?}",
-            type_check_failure(options)
-        )
-    })
+    result.map_err(|errors| anyhow::anyhow!("Reconfigured spec failed type checking: {errors:?}"))
 }
 
 fn configure_reconfigurable_dataflow_builder(
@@ -713,7 +653,7 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             output_pipeline: None,
             shutdown_timeout: None,
             runtime,
-            semantics: Semantics::GradualTypedUntimed,
+            semantics: Semantics::TypedUntimed,
             distribution_mode: DistributionMode::CentralMonitor,
             distribution_mode_builder: None,
             scheduler_mode: SchedulerCommunication::Null,
@@ -1061,13 +1001,13 @@ where
             Semantics::Causal => {
                 anyhow::bail!("causal semantics requires DSRV and the semi-sync runtime")
             }
-            Semantics::DelayedQuantitative | Semantics::GradualTypedUntimed => {
+            Semantics::DelayedQuantitative | Semantics::TypedUntimed => {
                 mstlo::Semantics::DelayedQuantitative
             }
             Semantics::DelayedQualitative => mstlo::Semantics::DelayedQualitative,
             Semantics::EagerQualitative => mstlo::Semantics::EagerQualitative,
             Semantics::RobustnessInterval => mstlo::Semantics::RobustnessInterval,
-            Semantics::Untimed | Semantics::TypedUntimed => mstlo::Semantics::default(),
+            Semantics::Untimed => mstlo::Semantics::default(),
         })
     }
 
@@ -1156,29 +1096,21 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
             "Creating common builder with distribution mode: {:?}",
             distribution_mode
         );
-        if let Some(model) = &model {
-            ensure_check_mode(semantics, model)
-                .context("Specification cannot run in this runtime")?;
-        }
-        // Every runtime runs an elaborated specification, checked by the
-        // caller as `type_check_options` says; reconfigurable runtimes also
-        // need the caller's preparation for each replacement.
+        // Every runtime runs a checked, elaborated specification; live replacements
+        // use the caller's preparation before reaching the runtime.
         let replacement_preparation = || {
             let prepare = replacement_preparation
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("{runtime:?} requires a replacement preparation"))?;
-            anyhow::Ok(admit_replacements(semantics, prepare))
+            anyhow::Ok(move |source: &str| prepare(source))
         };
-        let dsrv_semantics = matches!(
-            semantics,
-            Semantics::Untimed | Semantics::TypedUntimed | Semantics::GradualTypedUntimed
-        );
+        let dsrv_semantics = matches!(semantics, Semantics::Untimed | Semantics::TypedUntimed);
         let builder: Box<dyn RuntimeBuilderDyn<ElaboratedDsrvSpecification, Value>> =
             match (runtime, semantics) {
                 (RuntimeSpec::Async, Semantics::Untimed) => {
                     Box::new(AsyncRuntimeBuilder::<ValueConfig, UntimedDsrvSemantics>::new())
                 }
-                (RuntimeSpec::Async, Semantics::TypedUntimed | Semantics::GradualTypedUntimed) => {
+                (RuntimeSpec::Async, Semantics::TypedUntimed) => {
                     Box::new(AsyncRuntimeBuilder::<ValueConfig, CheckedUntimedDsrvSemantics>::new())
                 }
                 (RuntimeSpec::Dataflow(policy), semantics) if dsrv_semantics => {
@@ -1208,7 +1140,7 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
                 }
                 (runtime @ RuntimeSpec::ReconfDataflow(_), semantics) => {
                     Box::new(ReconfigurableDataflowRuntimeBuilder::new().setup_error(format!(
-                            "{runtime:?} supports only Untimed, TypedUntimed, and GradualTypedUntimed semantics; got {semantics:?}"
+                            "{runtime:?} supports only Untimed and TypedUntimed semantics; got {semantics:?}"
                         )))
                 }
                 (RuntimeSpec::SemiSync, Semantics::Untimed) => Box::new(SemiSyncRuntimeBuilder::<
@@ -1217,7 +1149,7 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
                 >::new()),
                 (
                     RuntimeSpec::SemiSync,
-                    Semantics::TypedUntimed | Semantics::GradualTypedUntimed,
+                    Semantics::TypedUntimed,
                 ) => Box::new(SemiSyncRuntimeBuilder::<
                     SemiSyncValueConfig,
                     CheckedUntimedDsrvSemantics,
@@ -1243,7 +1175,7 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
                 }
                 (
                     RuntimeSpec::ReconfSemiSync,
-                    Semantics::TypedUntimed | Semantics::GradualTypedUntimed,
+                    Semantics::TypedUntimed,
                 ) => {
                     let builder = configure_reconfigurable_builder(
                         ReconfSemiSyncRuntimeBuilder::<
@@ -1266,7 +1198,7 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
                     );
                     Box::new(builder)
                 }
-                (RuntimeSpec::Distributed, Semantics::Untimed | Semantics::GradualTypedUntimed) => {
+                (RuntimeSpec::Distributed, Semantics::Untimed | Semantics::TypedUntimed) => {
                     debug!(
                         "Setting up distributed runtime with distribution_mode = {:?}",
                         distribution_mode
@@ -1610,11 +1542,11 @@ mod tests {
     }
 
     #[test]
-    fn distributed_builder_accepts_gradually_checked_untimed_selection() {
+    fn distributed_builder_accepts_checked_untimed_selection() {
         let builder =
             GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::create_common_builder(
                 RuntimeSpec::Distributed,
-                Semantics::GradualTypedUntimed,
+                Semantics::TypedUntimed,
                 None,
                 None,
                 DistributionMode::CentralMonitor,
@@ -1632,7 +1564,7 @@ mod tests {
             );
         assert!(
             builder.is_ok(),
-            "gradual CLI selection must reach the distributed evaluator"
+            "checked untimed selection must reach the distributed evaluator"
         );
     }
 
@@ -1696,7 +1628,7 @@ mod tests {
         output_pipeline: Option<OutputPipeline<Value>>,
     ) -> GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
         let spec = crate::dsrv_fixtures::elaborated(
-            "language distributed\nin x\nout c\nc = monitored_at(x, A)",
+            "language distributed\nin x: Int\nout c\nc = monitored_at(x, A)",
         );
         let mut builder = GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new()
             .executor(Rc::new(LocalExecutor::new()))
@@ -1861,7 +1793,7 @@ mod tests {
         source: &str,
         presented: &RefCell<Vec<Vec<&'static str>>>,
     ) -> anyhow::Result<ElaboratedDsrvSpecification> {
-        prepare_replacement(source, TypeCheckOptions::STRICT, |warnings| {
+        prepare_replacement(source, |warnings| {
             presented
                 .borrow_mut()
                 .push(warnings.iter().map(SemanticWarning::code).collect());
@@ -1895,7 +1827,7 @@ mod tests {
     #[test]
     fn a_replacement_whose_warnings_cannot_be_presented_is_refused() {
         let presentations = Cell::new(0);
-        let error = prepare_replacement(WARNING_REPLACEMENT, TypeCheckOptions::STRICT, |_| {
+        let error = prepare_replacement(WARNING_REPLACEMENT, |_| {
             presentations.set(presentations.get() + 1);
             anyhow::bail!("presentation closed")
         })
@@ -1920,95 +1852,5 @@ mod tests {
             *presented.borrow(),
             [vec!["dsrv.redundant-cast"], vec!["dsrv.redundant-cast"]]
         );
-    }
-
-    // Checking-policy provenance at the builder.
-
-    const STRICTLY_TYPED: &str = "in x: Int\nout y: Int\ny = x + 1";
-
-    fn run_under(
-        semantics: Semantics,
-        spec: ElaboratedDsrvSpecification,
-    ) -> anyhow::Result<Box<dyn Runtime>> {
-        let executor = Rc::new(LocalExecutor::new());
-        smol::block_on(
-            GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new()
-                .executor(executor)
-                .model(spec)
-                .input(empty_input_stream())
-                .output_writer(counted_writer(Rc::new(Cell::new(0))))
-                .runtime(RuntimeSpec::Async)
-                .semantics(semantics)
-                .build(),
-        )
-    }
-
-    #[test]
-    fn typed_untimed_refuses_a_gradually_checked_specification() {
-        let gradual =
-            crate::dsrv_fixtures::elaborated_with(STRICTLY_TYPED, TypeCheckOptions::GRADUAL);
-        let error = match run_under(Semantics::TypedUntimed, gradual) {
-            Ok(_) => panic!("a gradual artefact must not run under typed-untimed"),
-            Err(error) => error,
-        };
-        assert!(
-            format!("{error:#}").contains("requires a strictly checked specification"),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn gradual_capable_semantics_accept_either_policy() {
-        for semantics in [
-            Semantics::Untimed,
-            Semantics::GradualTypedUntimed,
-            Semantics::TypedUntimed,
-        ] {
-            for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
-                let spec = crate::dsrv_fixtures::elaborated_with(STRICTLY_TYPED, options);
-                let admissible = !(semantics == Semantics::TypedUntimed
-                    && options.mode == TypeCheckMode::Gradual);
-                assert_eq!(
-                    ensure_check_mode(semantics, &spec).is_ok(),
-                    admissible,
-                    "{semantics:?} with {options:?}"
-                );
-                if admissible {
-                    run_under(semantics, spec).unwrap_or_else(|error| {
-                        panic!("{semantics:?} with {options:?}: {error:#}")
-                    });
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn a_gradual_replacement_cannot_enter_a_strict_runtime() {
-        let prepared = Rc::new(Cell::new(0));
-        let counted = Rc::clone(&prepared);
-        let gradual_preparation: ReplacementPreparation<ElaboratedDsrvSpecification> =
-            Rc::new(move |source| {
-                counted.set(counted.get() + 1);
-                prepare_replacement(source, TypeCheckOptions::GRADUAL, |_| Ok(()))
-            });
-        let strict_runtime =
-            admit_replacements(Semantics::TypedUntimed, Rc::clone(&gradual_preparation));
-        let error = strict_runtime(STRICTLY_TYPED)
-            .expect_err("a gradual replacement is refused by a strict runtime");
-        assert!(
-            format!("{error:#}").contains("requires a strictly checked specification"),
-            "{error:#}"
-        );
-        let gradual_runtime =
-            admit_replacements(Semantics::GradualTypedUntimed, gradual_preparation);
-        let admitted = gradual_runtime(STRICTLY_TYPED).expect("a gradual runtime admits it");
-        assert_eq!(admitted.check_mode(), TypeCheckMode::Gradual);
-        // Admission reuses the preparation's result; nothing is prepared twice.
-        assert_eq!(prepared.get(), 2);
-
-        let strict_preparation: ReplacementPreparation<ElaboratedDsrvSpecification> =
-            Rc::new(|source| prepare_replacement(source, TypeCheckOptions::STRICT, |_| Ok(())));
-        admit_replacements(Semantics::TypedUntimed, strict_preparation)(STRICTLY_TYPED)
-            .expect("a strict replacement enters a strict runtime");
     }
 }

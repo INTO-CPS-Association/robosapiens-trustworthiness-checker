@@ -38,10 +38,7 @@ pub fn render_checked_program(view: CheckedProgramView<'_>) -> String {
     render(
         view.specification.unchecked(),
         view.modules,
-        match view.specification.check_mode() {
-            super::TypeCheckMode::Strict => "checked (strict)",
-            super::TypeCheckMode::Gradual => "checked (gradual)",
-        },
+        "checked",
         |name, _| view.specification.type_annotation(name),
     )
 }
@@ -140,7 +137,7 @@ fn render<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::dsrv::{TypeCheckOptions, parser::parse_str};
+    use crate::lang::dsrv::parser::parse_str;
 
     #[test]
     fn expanded_report_marks_itself_and_keeps_declaration_order() {
@@ -159,11 +156,7 @@ mod tests {
     #[test]
     fn module_origins_and_checked_annotations_are_visible() {
         let specification = parse_str("out y\ny = 1").unwrap();
-        let checked = specification
-            .check(TypeCheckOptions::GRADUAL)
-            .into_parts()
-            .0
-            .unwrap();
+        let checked = specification.check().into_parts().0.unwrap();
         let modules = [
             ActivatedModule {
                 path: "local".into(),

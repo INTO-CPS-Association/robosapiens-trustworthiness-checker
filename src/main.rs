@@ -27,7 +27,7 @@ use trustworthiness_checker::lang::dsrv::program::load_program_file;
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
 use trustworthiness_checker::runtime::GeneralRuntimeBuilder;
 use trustworthiness_checker::runtime::builder::{
-    DistributionMode, LangSpecification, prepare_replacement, type_check_options,
+    DistributionMode, LangSpecification, prepare_replacement,
 };
 use trustworthiness_checker::runtime::mstlo::MstloTimedValue;
 use trustworthiness_checker::{self as tc, Specification};
@@ -89,9 +89,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // A DSRV model and every live replacement are checked as the chosen
     // semantics requires, and their warnings shown, before any runtime sees
     // them.
-    let options = type_check_options(cli.semantics);
     let builder = builder.prepare_replacement(move |source| {
-        prepare_replacement(source, options, |warnings| {
+        prepare_replacement(source, |warnings| {
             present_warnings(REPLACEMENT_LABEL, source, warnings)
         })
     });
@@ -140,10 +139,15 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         );
     }
     info!(%model, "Parsed model");
-    let (checked, warnings) = model.check_and_elaborate(options).into_parts();
+    let (checked, warnings) = model.check_and_elaborate().into_parts();
     present_warnings(cli.model.as_str(), &program.root_source, &warnings)?;
-    let model =
-        checked.map_err(|errors| anyhow::anyhow!("Model failed type checking: {errors:?}"))?;
+    let model = checked.map_err(|errors| {
+        let errors = errors
+            .iter()
+            .map(|error| format!("  {error}"))
+            .collect::<Vec<_>>();
+        anyhow::anyhow!("Model failed type checking:\n{}", errors.join("\n"))
+    })?;
 
     // Localise the checked model to contain only the local variables (if
     // needed); localisation keeps every node's type, so it is not rechecked.

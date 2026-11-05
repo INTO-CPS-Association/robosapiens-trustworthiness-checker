@@ -132,7 +132,7 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalCheckedSemiSyncConfig<D>>
 }
 
 /// Evaluate an expression without its types. Its runtime expressions are
-/// parsed at their prepared sites and evaluated unchecked.
+/// checked at their prepared sites and evaluated by the reference path.
 fn evaluate<AC, D>(expr: &UntypedExpr, ctx: &AC::Ctx) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
@@ -182,12 +182,8 @@ where
         Floor(value) => combinators::unary(UnaryOperator::Floor, child(value)),
         Ceil(value) => combinators::unary(UnaryOperator::Ceiling, child(value)),
         Round(value) => combinators::unary(UnaryOperator::Round, child(value)),
-        Cast(value, target) | Ascribe(value, target) => {
-            combinators::cast(child(value), target.clone())
-        }
-        Check(value, target, location) => {
-            combinators::check(child(value), target.clone(), node.span(), location.clone())
-        }
+        Cast(value, target) => combinators::cast(child(value), target.clone()),
+        Ascribe(value, _) => combinators::lift_base(child(value)),
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);
@@ -264,15 +260,8 @@ where
         Floor(value) => combinators::unary(UnaryOperator::Floor, child(value)),
         Ceil(value) => combinators::unary(UnaryOperator::Ceiling, child(value)),
         Round(value) => combinators::unary(UnaryOperator::Round, child(value)),
-        Cast(value, target) | Ascribe(value, target) => {
-            combinators::cast(child(value), target.clone())
-        }
-        Check(value, target, location) => combinators::check(
-            child(value),
-            target.clone(),
-            node.expr().span(),
-            location.clone(),
-        ),
+        Cast(value, target) => combinators::cast(child(value), target.clone()),
+        Ascribe(value, _) => combinators::lift_base(child(value)),
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);
@@ -433,6 +422,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn nonconverting_casts_preserve_markers_and_their_causal_evidence() {
+        use crate::causal::TimedAtom;
+        use crate::core::StreamType;
+        for (target, known) in [
+            (StreamType::Int, Value::Int(1)),
+            (
+                StreamType::List(Box::new(StreamType::Int)),
+                Value::List(vec![Value::Int(1)].into()),
+            ),
+        ] {
+            let input: Vec<_> = [known, Value::NoVal, Value::Deferred, Value::NoVal]
+                .into_iter()
+                .enumerate()
+                .map(|(tick, value)| {
+                    CausalValue::new(
+                        value,
+                        RoleCausalSet::atom(TimedAtom::new(VarName::new("x"), tick as u64)),
+                    )
+                })
+                .collect();
+            let output = smol::block_on(
+                super::combinators::cast(Box::pin(futures::stream::iter(input.clone())), target)
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(output, input);
+        }
+        for (target, bad) in [
+            (StreamType::Int, Value::Str("bad".into())),
+            (
+                StreamType::List(Box::new(StreamType::Int)),
+                Value::List(vec![Value::Str("bad".into())].into()),
+            ),
+        ] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                smol::block_on(
+                    super::combinators::cast(
+                        Box::pin(futures::stream::iter([
+                            CausalValue::<RoleCausalSet>::constant(bad),
+                        ])),
+                        target,
+                    )
+                    .collect::<Vec<_>>(),
+                )
+            }));
+            assert!(result.is_err());
+        }
+    }
+
     #[apply(async_test)]
     async fn unrepresentable_rounding_panics_in_causal_stream_evaluation(
         executor: Rc<LocalExecutor<'static>>,
@@ -521,7 +559,8 @@ mod tests {
     async fn reference_and_role_semantics_classify_conditional_support(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let source = "in guard\nin x\nin y\nout result\nresult = if guard then x else y";
+        let source =
+            "in guard: Bool\nin x: Int\nin y: Int\nout result\nresult = if guard then x else y";
         let input = BTreeMap::from([
             ("guard".into(), vec![Value::Bool(true)]),
             ("x".into(), vec![Value::Int(11)]),
@@ -556,7 +595,7 @@ mod tests {
     async fn false_implication_uses_direct_antecedent_support(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let source = "in antecedent\nin consequent\nout result\nresult = antecedent => consequent";
+        let source = "in antecedent: Bool\nin consequent: Bool\nout result\nresult = antecedent => consequent";
         let result = unchecked_output::<RoleCausalSet, RoleCausalDsrvSemantics<RoleCausalSet>>(
             source,
             BTreeMap::from([
@@ -582,7 +621,7 @@ mod tests {
     async fn reference_collapses_boolean_alternatives_and_role_antichain_retains_them(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let source = "in a\nin b\nout result\nresult = a || b";
+        let source = "in a: Bool\nin b: Bool\nout result\nresult = a || b";
         let input = BTreeMap::from([
             ("a".into(), vec![Value::Bool(true)]),
             ("b".into(), vec![Value::Bool(true)]),
@@ -619,7 +658,7 @@ mod tests {
     async fn dynamic_selection_is_support_in_reference_and_activation_in_roles(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let source = "in x\nin property\nout result\nresult = dynamic(property)";
+        let source = "in x: Int\nin property: Str\nout result\nresult = dynamic(property: Int)";
         let input = BTreeMap::from([
             ("x".into(), vec![Value::Int(4)]),
             ("property".into(), vec![Value::Str("x + 1".into())]),

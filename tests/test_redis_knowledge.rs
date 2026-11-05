@@ -451,7 +451,7 @@ async fn redis_knowledge_multi_phase_maple_k_inputs_drive_observable_runtime(
     .build(variables)
     .await?;
 
-    let spec = "in analyse_completed\nin execute_completed\nin current_plan\nout observed_plan\nobserved_plan = if analyse_completed && execute_completed then current_plan else \"waiting\""
+    let spec = "in analyse_completed: Bool\nin execute_completed: Bool\nin current_plan: Str\nout observed_plan\nobserved_plan = if analyse_completed && execute_completed then current_plan else \"waiting\""
         .parse::<DsrvSpecification>()?;
     let (output_sender, output_receiver) =
         async_unsync::bounded::channel::<BTreeMap<VarName, Value>>(1024).into_split();
@@ -463,9 +463,8 @@ async fn redis_knowledge_multi_phase_maple_k_inputs_drive_observable_runtime(
         GeneralRuntimeBuilder::<trustworthiness_checker::ElaboratedDsrvSpecification, Value>::new()
             .executor(executor.clone())
             .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
-            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate(
                 spec.clone(),
-                trustworthiness_checker::core::Semantics::GradualTypedUntimed,
             ))
             .input(input)
             .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(

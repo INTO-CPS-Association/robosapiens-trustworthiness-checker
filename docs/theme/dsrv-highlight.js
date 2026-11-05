@@ -57,7 +57,7 @@
                 },
                 {
                     className: "type",
-                    begin: /\b(?:Int|Float|Bool|Str|Unit|Any|List|Map|Struct)\b/,
+                    begin: /\b(?:Int|Float|Bool|Str|Unit|List|Map|Struct)\b/,
                 },
                 {
                     className: "attr",

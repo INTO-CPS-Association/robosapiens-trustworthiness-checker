@@ -72,6 +72,95 @@ fn program_body(root: &str, sources: &[(&str, &str)], var: &str) -> String {
 // What a constant stands for
 // ---------------------------------------------------------------------------
 
+/// A cast in a constant makes the conversion a cast makes when it runs, so
+/// `as Float` does what the refusal of `2.0 * n` recommends.
+#[test]
+fn a_cast_in_a_constant_converts_as_it_does_at_run_time() {
+    for (declaration, typ, expected) in [
+        (
+            "const n: Int = 3\nconst c: Float = 2.0 * (n as Float)",
+            "Float",
+            "6.0",
+        ),
+        (
+            "const c: Float = 2.0 * (n as Float)\nconst n: Int = 3",
+            "Float",
+            "6.0",
+        ),
+        ("const c: Float = 3 as Float", "Float", "3.0"),
+        (
+            "const n: Int = 3\nconst c: Float = n as Float",
+            "Float",
+            "3.0",
+        ),
+        ("const c: Str = 3 as Str", "Str", "\"3\""),
+        ("const c: Str = 2.5 as Str", "Str", "\"2.5\""),
+        ("const c: Str = true as Str", "Str", "\"true\""),
+        ("const c: Str = \"s\" as Str", "Str", "\"s\""),
+        ("const c: Int = 3 as Int", "Int", "3"),
+        ("const c: Float = 2.5 as Float", "Float", "2.5"),
+        // An alias of the type works as it does in an equation.
+        (
+            "type Real = Float\nconst n: Int = 3\nconst c: Real = n as Real",
+            "Float",
+            "3.0",
+        ),
+        ("const c: List<Int> = [] as List<Int>", "List<Int>", "[]"),
+        ("const c: List<Int> = [1] as List<Int>", "List<Int>", "[1]"),
+    ] {
+        let source = format!("{C}{declaration}\nin x: Int\nout y: {typ}\ny = c\n");
+        assert_eq!(body(&source), expected, "{declaration}");
+    }
+}
+
+/// A struct stays a struct through a cast of its own type, so its fields can
+/// still be read.
+#[test]
+fn a_cast_of_a_struct_constant_to_its_type_stays_a_struct() {
+    let source = format!(
+        "{C}type S = Struct<a: Int>\nconst c: S = {{a: 1}} as S\n\
+         out y: Int\ny = c.a\n"
+    );
+    crate::dsrv_fixtures::checked(&source);
+}
+
+/// A cast a run-time value could not make is refused where the file is read,
+/// with what could not be converted to what, located at the cast.
+#[test]
+fn a_cast_in_a_constant_that_cannot_convert_is_refused() {
+    for (declaration, reported) in [
+        (
+            "const n: Float = 1.5\nconst c: Int = n as Int",
+            "cannot cast 1.5 to Int",
+        ),
+        ("const c: Int = 1.5 as Int", "cannot cast 1.5 to Int"),
+        (
+            "const c: Float = \"s\" as Float",
+            "cannot cast \"s\" to Float",
+        ),
+        ("const c: Int = true as Int", "cannot cast true to Int"),
+        ("const c: Str = [1] as Str", "cannot cast [1] to Str"),
+        (
+            "const c: List<Float> = [1] as List<Float>",
+            "cannot cast [1] to List<Float>",
+        ),
+    ] {
+        let source = format!("{C}{declaration}\nin x: Int\nout y: Int\ny = x\n");
+        let error = refusal(&source);
+        assert!(error.contains(reported), "{declaration}: {error}");
+    }
+}
+
+/// Without the cast it stays what it was: `Int` and `Float` do not convert
+/// implicitly, in a constant as in an equation.
+#[test]
+fn a_constant_mixing_int_and_float_is_still_refused_without_a_cast() {
+    let error = refusal(&format!(
+        "{C}const n: Int = 3\nconst c: Float = 2.0 * n\nin x: Int\nout y: Int\ny = x\n"
+    ));
+    assert!(error.contains("as Float"), "{error}");
+}
+
 #[test]
 fn a_constant_is_written_in_as_a_literal() {
     let printed = body(&format!(

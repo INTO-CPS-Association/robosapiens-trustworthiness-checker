@@ -286,7 +286,6 @@ fn analyse_operation(
         BoundOp::Reconfigurable(_) => (bounds, None),
         BoundOp::Unary { .. }
         | BoundOp::Ascribe { .. }
-        | BoundOp::Check { .. }
         | BoundOp::Binary { .. }
         | BoundOp::Default { .. }
         | BoundOp::Init { .. }

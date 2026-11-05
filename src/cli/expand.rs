@@ -5,7 +5,6 @@ use std::io::{self, Write};
 use crate::{
     cli::diagnostics::render_warnings,
     lang::dsrv::{
-        TypeCheckMode, TypeCheckOptions,
         inspection::{
             CheckedProgramView, ExpandedProgramView, render_checked_program,
             render_expanded_program,
@@ -35,7 +34,7 @@ impl InspectionIoError {
 /// The complete report is built before the first stdout write.
 pub fn run_inspection(
     model: &str,
-    check_mode: Option<TypeCheckMode>,
+    check: bool,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> Result<bool, InspectionIoError> {
@@ -48,21 +47,20 @@ pub fn run_inspection(
         }
     };
 
-    let report = match check_mode {
-        None => render_expanded_program(ExpandedProgramView {
+    let report = match check {
+        false => render_expanded_program(ExpandedProgramView {
             specification: &loaded.specification,
             modules: &loaded.modules,
         }),
-        Some(mode) => {
-            let options = TypeCheckOptions { mode };
-            let (checked, warnings) = loaded.specification.check(options).into_parts();
+        true => {
+            let (checked, warnings) = loaded.specification.check().into_parts();
             render_warnings(stderr, model, &loaded.root_source, &warnings)
                 .map_err(InspectionIoError::Stderr)?;
             let checked = match checked {
                 Ok(checked) => checked,
                 Err(errors) => {
                     for error in errors {
-                        writeln!(stderr, "error: {error:?}").map_err(InspectionIoError::Stderr)?;
+                        writeln!(stderr, "error: {error}").map_err(InspectionIoError::Stderr)?;
                     }
                     stderr.flush().map_err(InspectionIoError::Stderr)?;
                     return Ok(false);
@@ -107,13 +105,9 @@ mod tests {
     }
 
     #[test]
-    fn plain_strict_and_gradual_use_the_requested_view() {
+    fn unchecked_and_checked_use_the_requested_view() {
         let path = model("out y: Int\ny = 1");
-        for (mode, marker) in [
-            (None, "expanded, unchecked"),
-            (Some(TypeCheckMode::Strict), "checked (strict)"),
-            (Some(TypeCheckMode::Gradual), "checked (gradual)"),
-        ] {
+        for (mode, marker) in [(false, "expanded, unchecked"), (true, "checked")] {
             let (mut out, mut err) = (Vec::new(), Vec::new());
             assert!(run_inspection(path.to_str().unwrap(), mode, &mut out, &mut err).unwrap());
             assert!(String::from_utf8(out).unwrap().contains(marker));
@@ -126,15 +120,7 @@ mod tests {
     fn failed_check_keeps_stdout_empty_and_diagnostics_on_stderr() {
         let path = model("out y: Bool\ny = 1");
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        assert!(
-            !run_inspection(
-                path.to_str().unwrap(),
-                Some(TypeCheckMode::Strict),
-                &mut out,
-                &mut err
-            )
-            .unwrap()
-        );
+        assert!(!run_inspection(path.to_str().unwrap(), true, &mut out, &mut err).unwrap());
         assert!(out.is_empty());
         assert!(String::from_utf8(err).unwrap().contains("error:"));
         fs::remove_file(path).unwrap();
@@ -144,20 +130,8 @@ mod tests {
     fn successful_warnings_stay_on_stderr() {
         let path = model("out y = 1 as Int");
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        assert!(
-            run_inspection(
-                path.to_str().unwrap(),
-                Some(TypeCheckMode::Gradual),
-                &mut out,
-                &mut err
-            )
-            .unwrap()
-        );
-        assert!(
-            String::from_utf8(out)
-                .unwrap()
-                .contains("checked (gradual)")
-        );
+        assert!(run_inspection(path.to_str().unwrap(), true, &mut out, &mut err).unwrap());
+        assert!(String::from_utf8(out).unwrap().contains("checked"));
         assert!(
             String::from_utf8(err)
                 .unwrap()
@@ -202,7 +176,7 @@ mod tests {
                 flush: true,
             },
         ] {
-            let error = run_inspection(path.to_str().unwrap(), None, &mut writer, &mut Vec::new())
+            let error = run_inspection(path.to_str().unwrap(), false, &mut writer, &mut Vec::new())
                 .unwrap_err();
             assert!(matches!(error, InspectionIoError::Stdout(_)));
             assert_eq!(error.kind(), writer.kind);
@@ -224,7 +198,7 @@ mod tests {
         ] {
             let error = run_inspection(
                 "/a/model/that/does/not/exist.dsrv",
-                None,
+                false,
                 &mut Vec::new(),
                 &mut writer,
             )
@@ -284,18 +258,20 @@ mod tests {
         let path = model("out y: Int\ny = 1");
         let mut zero = ZeroProgress;
         let error =
-            run_inspection(path.to_str().unwrap(), None, &mut zero, &mut Vec::new()).unwrap_err();
+            run_inspection(path.to_str().unwrap(), false, &mut zero, &mut Vec::new()).unwrap_err();
         assert!(matches!(error, InspectionIoError::Stdout(_)));
         assert_eq!(error.kind(), ErrorKind::WriteZero);
 
         let mut partial = PartialThenFail { wrote: false };
         assert!(matches!(
-            run_inspection(path.to_str().unwrap(), None, &mut partial, &mut Vec::new()),
+            run_inspection(path.to_str().unwrap(), false, &mut partial, &mut Vec::new()),
             Err(InspectionIoError::Stdout(_))
         ));
 
         let mut short = ShortWriter::default();
-        assert!(run_inspection(path.to_str().unwrap(), None, &mut short, &mut Vec::new()).unwrap());
+        assert!(
+            run_inspection(path.to_str().unwrap(), false, &mut short, &mut Vec::new()).unwrap()
+        );
         assert!(
             String::from_utf8(short.0)
                 .unwrap()
@@ -306,20 +282,12 @@ mod tests {
 
     #[test]
     fn warnings_survive_a_failed_check_without_stdout_fallback() {
-        let path = model("out y: Str = \"warn:alpha\"\nout z: Bool = 1");
+        let path = model("out y: Str = \"a\" as Str\nout z: Bool = 1");
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        assert!(
-            !run_inspection(
-                path.to_str().unwrap(),
-                Some(TypeCheckMode::Strict),
-                &mut out,
-                &mut err
-            )
-            .unwrap()
-        );
+        assert!(!run_inspection(path.to_str().unwrap(), true, &mut out, &mut err).unwrap());
         let diagnostics = String::from_utf8(err).unwrap();
         assert!(out.is_empty());
-        assert!(diagnostics.contains("warning[test-alpha]"));
+        assert!(diagnostics.contains("warning[dsrv.redundant-cast]"));
         assert!(diagnostics.contains("error:"));
         fs::remove_file(path).unwrap();
     }

@@ -1,32 +1,26 @@
-//! How checking reports warnings, exercised with the test-only fixture rules
-//! in `type_checker::warnings`: a string literal `"warn:alpha"`,
-//! `"warn:beta"` or `"warn:both"` proves those warnings at itself, and
-//! `"warn:unplaced"` proves a beta warning without a position.
+//! How checking reports warnings, exercised with a redundant cast, `"a" as Str`,
+//! which warns at itself. How a collector orders and identifies what is emitted to
+//! it is tested in `type_checker::warnings`.
 
 use crate::core::StreamType;
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
 use crate::lang::dsrv::ast::DsrvSpecification;
 use crate::lang::dsrv::diagnostics::{
     SemanticAnalysisReport, SemanticError, SemanticWarning, SemanticWarningKind,
 };
 use crate::lang::dsrv::parser::parse_expr;
 use crate::lang::dsrv::type_checker::type_check_expression;
-use crate::lang::dsrv::{ElaboratedDsrvSpecification, TypeCheckOptions};
 
 use test_log::test;
 
-const MODES: [TypeCheckOptions; 2] = [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL];
-
-fn check(
-    source: &str,
-    options: TypeCheckOptions,
-) -> SemanticAnalysisReport<crate::CheckedDsrvSpecification> {
+fn check(source: &str) -> SemanticAnalysisReport<crate::CheckedDsrvSpecification> {
     source
         .parse::<DsrvSpecification>()
         .unwrap_or_else(|error| panic!("{source}: {error}"))
-        .check(options)
+        .check()
 }
 
-/// Each warning as its rule and the text its span covers.
+/// Each warning as its kind and the text its span covers.
 fn found<'a>(
     source: &'a str,
     warnings: &[SemanticWarning],
@@ -44,25 +38,24 @@ fn found<'a>(
 
 #[test]
 fn a_specification_that_checks_keeps_its_warnings() {
-    let source = "out y: Str = \"warn:alpha\"";
-    for options in MODES {
-        let report = check(source, options);
-        assert!(report.result().is_ok(), "{options:?}");
-        assert_eq!(
-            found(source, report.warnings()),
-            [(SemanticWarningKind::TestAlpha, Some("\"warn:alpha\""))],
-            "{options:?}"
-        );
-        let warning = &report.warnings()[0];
-        assert_eq!(warning.code(), "test-alpha");
-        assert_eq!(warning.message(), "alpha fixture");
-    }
+    let source = "out y: Str = \"a\" as Str";
+
+    let report = check(source);
+    assert!(report.result().is_ok(), "");
+    assert_eq!(
+        found(source, report.warnings()),
+        [(SemanticWarningKind::RedundantCast, Some("\"a\" as Str"))],
+        ""
+    );
+    let warning = &report.warnings()[0];
+    assert_eq!(warning.code(), "dsrv.redundant-cast");
+    assert_eq!(warning.message(), "cast from Str to Str is redundant");
 }
 
 #[test]
 fn a_failed_check_keeps_the_warnings_it_had_proved() {
-    let source = "out y: Str = \"warn:alpha\"\nout z: Bool = 1";
-    let (result, warnings) = check(source, TypeCheckOptions::STRICT).into_parts();
+    let source = "out y: Str = \"a\" as Str\nout z: Bool = 1";
+    let (result, warnings) = check(source).into_parts();
     let errors = result.expect_err("z is ill-typed");
     assert!(
         errors
@@ -71,126 +64,55 @@ fn a_failed_check_keeps_the_warnings_it_had_proved() {
     );
     assert_eq!(
         found(source, &warnings),
-        [(SemanticWarningKind::TestAlpha, Some("\"warn:alpha\""))]
+        [(SemanticWarningKind::RedundantCast, Some("\"a\" as Str"))]
     );
 }
 
 #[test]
 fn validation_failure_stops_before_anything_warns() {
-    let source = "out y: Str = \"warn:alpha\"\nout z: Int = missing";
-    for options in MODES {
-        let report = check(source, options);
-        assert!(report.result().is_err(), "{options:?}");
-        assert!(report.warnings().is_empty(), "{options:?}");
-    }
+    let source = "out y: Str = \"a\" as Str\nout z: Int = missing";
+
+    let report = check(source);
+    assert!(report.result().is_err(), "");
+    assert!(report.warnings().is_empty(), "");
 }
 
 #[test]
-fn gradual_checking_revisits_a_node_but_reports_it_once() {
-    // `y` is inferred before `z` can be, so inference visits it more than
-    // once; only the final pass is authoritative.
-    let source = "out z = y\nout y = \"warn:alpha\"";
-    let report = check(source, TypeCheckOptions::GRADUAL);
+fn an_inferred_dependency_reports_a_warning_once() {
+    // A dependency is checked once, even when a second root reads it.
+    let source = "out z = y\nout y = \"a\" as Str";
+    let report = check(source);
     assert!(report.result().is_ok());
     assert_eq!(
         found(source, report.warnings()),
-        [(SemanticWarningKind::TestAlpha, Some("\"warn:alpha\""))]
+        [(SemanticWarningKind::RedundantCast, Some("\"a\" as Str"))]
     );
 }
 
 #[test]
-fn gradual_inference_failure_does_not_retain_findings_from_the_failed_root() {
-    let source = "out y: Bool = if true then \"warn:alpha\" else 1";
-    let report = check(source, TypeCheckOptions::GRADUAL);
+fn inference_failure_keeps_the_findings_of_the_failed_root() {
+    let source = "out y: Bool = if true then \"a\" as Str else 1";
+    let report = check(source);
     assert!(report.result().is_err());
-    assert!(report.warnings().is_empty());
-}
-
-#[test]
-fn redundant_cast_warning_survives_an_enclosing_merge_to_any() {
-    let source = "out y: Any = if true then (1 as Int) else \"other\"";
-    let report = check(source, TypeCheckOptions::GRADUAL);
-    assert!(report.result().is_ok());
     assert_eq!(
         found(source, report.warnings()),
-        [(SemanticWarningKind::RedundantCast, Some("1 as Int"))]
+        [(SemanticWarningKind::RedundantCast, Some("\"a\" as Str"))]
     );
 }
 
-/// Branches that each say what they are, and differ, merge into an `Any`
-/// nobody asked for: that is warned about, in either checking mode.
-#[test]
-fn branches_of_different_types_merged_into_an_unrequested_any_warn() {
-    for (source, span) in [
-        (
-            "in c: Bool\nout b: Bool\nb = (if c then 1 else \"a\") == 1",
-            "if c then 1 else \"a\"",
-        ),
-        (
-            "in x: Int\nin s: Str\nout b: Bool\nb = default(x, s) == 1",
-            "default(x, s)",
-        ),
-        // The merge introduces an `Any` inside the list, not at the top.
-        (
-            "in c: Bool\nin xs: List<Int>\nin ys: List<Str>\nout b: Bool\n\
-             b = (if c then xs else ys) == xs",
-            "if c then xs else ys",
-        ),
-    ] {
-        for options in MODES {
-            let report = check(source, options);
-            assert!(report.result().is_ok(), "{source} {options:?}");
-            assert_eq!(
-                found(source, report.warnings()),
-                [(SemanticWarningKind::HeterogeneousBranches, Some(span))],
-                "{source} {options:?}"
-            );
-            assert_eq!(report.warnings()[0].code(), "dsrv.heterogeneous-branches");
-        }
-    }
-}
-
-/// A function or union that has an `Any` inside it does not say what its
-/// values are, so branches of those types are already dynamic and the merge
-/// does not warn.
-#[test]
-fn branches_of_function_or_union_types_containing_any_do_not_warn() {
-    let header = "use experimental::{modules, generics, tagged_unions}\nuse std::option::*\n";
-    for source in [
-        "in c: Bool\nin f: (Any -> Int)\nin g: (Any -> Str)\nout h: Bool\n\
-         h = (if c then f else g) == f",
-        "in c: Bool\nin f: (Int -> Any)\nin n: Int\nout h: Bool\nh = (if c then f else n) == n",
-        &format!(
-            "{header}in c: Bool\nin o: Option<Any>\nin n: Int\nout h: Bool\n\
-             h = (if c then o else n) == n"
-        ),
-    ] {
-        for options in MODES {
-            let report = check(source, options);
-            assert!(report.warnings().is_empty(), "{source} {options:?}");
-        }
-    }
-}
-
-/// An annotation says the `Any` is meant, an `Any` branch is dynamic
-/// already, equal types merge to themselves, and list elements are often
-/// mixed on purpose: none of these warn.
+/// Matching concrete contributions produce no merge warning.
 #[test]
 fn merges_that_are_not_surprising_do_not_warn() {
     for source in [
-        "in c: Bool\nout z: Any\nz = if c then 1 else \"a\"",
-        "in c: Bool\nin d: Any\nout b: Bool\nb = (if c then 1 else d) == 1",
         "in c: Bool\nout z: Int\nz = if c then 1 else 2",
         "in c: Bool\nin f: Float\nout z: Float\nz = if c then 1 else f",
     ] {
-        for options in MODES {
-            let report = check(source, options);
-            assert!(report.result().is_ok(), "{source} {options:?}");
-            assert!(report.warnings().is_empty(), "{source} {options:?}");
-        }
+        let report = check(source);
+        assert!(report.result().is_ok(), "{source} ");
+        assert!(report.warnings().is_empty(), "{source} ");
     }
-    let source = "out z\nz = [1, \"a\"]";
-    let report = check(source, TypeCheckOptions::GRADUAL);
+    let source = "out z\nz = [1, 2]";
+    let report = check(source);
     assert!(report.result().is_ok());
     assert!(report.warnings().is_empty());
 }
@@ -198,7 +120,7 @@ fn merges_that_are_not_surprising_do_not_warn() {
 #[test]
 fn redundant_cast_is_reported_once_by_the_authoritative_pass() {
     let source = "out y = 1 as Int";
-    let report = check(source, TypeCheckOptions::GRADUAL);
+    let report = check(source);
     assert!(report.result().is_ok());
     assert_eq!(
         found(source, report.warnings()),
@@ -209,41 +131,34 @@ fn redundant_cast_is_reported_once_by_the_authoritative_pass() {
 #[test]
 fn failed_or_unresolved_casts_do_not_warn() {
     for source in ["out y: Int = true as Int", "out y: Int = missing as Int"] {
-        for options in MODES {
-            let report = check(source, options);
-            assert!(report.result().is_err(), "{options:?}: {source}");
-            assert!(report.warnings().is_empty(), "{options:?}: {source}");
-        }
+        let report = check(source);
+        assert!(report.result().is_err(), ": {source}");
+        assert!(report.warnings().is_empty(), ": {source}");
     }
 }
 
 #[test]
-fn contextual_result_hint_does_not_manufacture_cast_redundancy() {
-    let source = "in x\nout y: Int = x as Int";
-    let report = check(source, TypeCheckOptions::GRADUAL);
-    assert!(report.result().is_err());
+fn an_explicit_integer_stream_to_float_conversion_is_not_redundant() {
+    let source = "in x:Int\nout y:Float = x as Float";
+    let report = check(source);
+    assert!(report.result().is_ok());
     assert!(report.warnings().is_empty());
 }
 
 #[test]
-fn warnings_are_ordered_by_position_then_rule_whatever_the_visiting_order() {
+fn warnings_are_ordered_by_position_whatever_the_visiting_order() {
     // Roots are checked by name, so `a` is visited before `z`.
-    let source = "out z: Str = \"warn:both\"\n\
-                  out b: Str = \"warn:unplaced\"\n\
-                  out a: Str = \"warn:beta\"";
-    for options in MODES {
-        let report = check(source, options);
-        assert_eq!(
-            found(source, report.warnings()),
-            [
-                (SemanticWarningKind::TestAlpha, Some("\"warn:both\"")),
-                (SemanticWarningKind::TestBeta, Some("\"warn:both\"")),
-                (SemanticWarningKind::TestBeta, Some("\"warn:beta\"")),
-                (SemanticWarningKind::TestBeta, None),
-            ],
-            "{options:?}"
-        );
-    }
+    let source = "out z: Str = \"z\" as Str\nout a: Str = \"a\" as Str";
+
+    let report = check(source);
+    assert_eq!(
+        found(source, report.warnings()),
+        [
+            (SemanticWarningKind::RedundantCast, Some("\"z\" as Str")),
+            (SemanticWarningKind::RedundantCast, Some("\"a\" as Str")),
+        ],
+        ""
+    );
 }
 
 #[test]
@@ -252,57 +167,54 @@ fn two_copies_of_a_def_body_warn_separately_though_they_share_a_span() {
     // copies of the literal carry one span and one code; they are still two
     // expanded nodes.
     let source = "use experimental::{functions}\n\
-                  def tag(n: Int) -> Str = \"warn:alpha\"\n\
+                  def tag(n: Int) -> Str = \"a\" as Str\n\
                   in x: Int\n\
                   out y: Str = tag(x)\n\
                   out z: Str = tag(x)";
-    for options in MODES {
-        let report = check(source, options);
-        assert!(report.result().is_ok(), "{options:?}");
-        let warnings = report.warnings();
-        assert_eq!(warnings.len(), 2, "{options:?}: {warnings:?}");
-        assert_eq!(warnings[0], warnings[1]);
-        assert_eq!(
-            &source[warnings[0].span().unwrap().to_range()],
-            "\"warn:alpha\""
-        );
-    }
+
+    let report = check(source);
+    assert!(report.result().is_ok(), "");
+    let warnings = report.warnings();
+    assert_eq!(warnings.len(), 2, ": {warnings:?}");
+    assert_eq!(warnings[0], warnings[1]);
+    assert_eq!(
+        &source[warnings[0].span().unwrap().to_range()],
+        "\"a\" as Str"
+    );
 }
 
 #[test]
-fn elaboration_and_parsing_with_options_keep_the_warnings() {
-    let source = "out y: Str = \"warn:alpha\"";
-    for options in MODES {
-        let elaborated =
-            check(source, options).map_checked(crate::CheckedDsrvSpecification::elaborate);
-        assert_eq!(elaborated.warnings().len(), 1);
-        let report = ElaboratedDsrvSpecification::parse_with(source, options).unwrap();
-        assert_eq!(
-            found(source, report.warnings()),
-            [(SemanticWarningKind::TestAlpha, Some("\"warn:alpha\""))]
-        );
-        let report = source
-            .parse::<DsrvSpecification>()
-            .unwrap()
-            .check_and_elaborate(options);
-        assert_eq!(report.warnings().len(), 1);
-        assert!(report.discard_warnings().is_ok());
-    }
+fn elaboration_and_parsing_keep_the_warnings() {
+    let source = "out y: Str = \"a\" as Str";
+
+    let elaborated = check(source).map_checked(crate::CheckedDsrvSpecification::elaborate);
+    assert_eq!(elaborated.warnings().len(), 1);
+    let report = ElaboratedDsrvSpecification::parse(source).unwrap();
+    assert_eq!(
+        found(source, report.warnings()),
+        [(SemanticWarningKind::RedundantCast, Some("\"a\" as Str"))]
+    );
+    let report = source
+        .parse::<DsrvSpecification>()
+        .unwrap()
+        .check_and_elaborate();
+    assert_eq!(report.warnings().len(), 1);
+    assert!(report.discard_warnings().is_ok());
 }
 
 #[test]
 fn standalone_expression_checking_reports_warnings_with_its_result() {
     let environment = Default::default();
-    let text = "\"warn:alpha\"";
+    let text = "\"a\" as Str";
     let report = type_check_expression(&parse_expr(text).unwrap(), &StreamType::Str, &environment);
     assert_eq!(
         found(text, report.warnings()),
-        [(SemanticWarningKind::TestAlpha, Some(text))]
+        [(SemanticWarningKind::RedundantCast, Some(text))]
     );
     assert!(report.result().is_ok());
 
     // The first element is proved before the second fails.
-    let text = "[\"warn:alpha\", 1]";
+    let text = "[\"a\" as Str, 1]";
     let report = type_check_expression(
         &parse_expr(text).unwrap(),
         &StreamType::List(Box::new(StreamType::Str)),
@@ -311,40 +223,34 @@ fn standalone_expression_checking_reports_warnings_with_its_result() {
     assert!(report.result().is_err());
     assert_eq!(
         found(text, report.warnings()),
-        [(SemanticWarningKind::TestAlpha, Some("\"warn:alpha\""))]
+        [(SemanticWarningKind::RedundantCast, Some("\"a\" as Str"))]
     );
 }
 
 #[test]
 fn runtime_expressions_discard_their_warnings() {
-    use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
-    // A runtime expression has no channel for warnings: it checks, and a
-    // runtime sees only the checked expression.
-    let checked = RuntimeExpressionSite::default()
-        .parse_and_check("\"warn:alpha\"")
+    let enclosing = crate::dsrv_fixtures::elaborated("out y:Str=dynamic(\"a\":Str)");
+    let site = enclosing
+        .var_expr_ref(&"y".into())
+        .unwrap()
+        .runtime_expression();
+    let checked = site
+        .parse_and_check("\"a\" as Str")
         .expect("a runtime expression that warns still checks");
-    assert_eq!(checked.expr().to_string(), "\"warn:alpha\"");
+    assert_eq!(checked.expr().to_string(), "(\"a\" as Str)");
 }
 
 #[test]
 fn runtime_expressions_deliberately_discard_a_redundant_cast_warning() {
-    use crate::VarName;
-    use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
-
-    let spec = "out y: Int = dynamic(\"1\": Int)"
-        .parse::<DsrvSpecification>()
-        .expect("the enclosing model parses");
-    let metadata = spec
-        .var_expr_ref(&VarName::new("y"))
-        .expect("y is defined")
-        .metadata();
-    let runtime_expression = RuntimeExpressionSite::new(
-        metadata.context.clone().expect("y has its source context"),
-        metadata.callable.clone().unwrap_or_default(),
-        None,
-    );
+    let enclosing = crate::dsrv_fixtures::elaborated("out y:Int=dynamic(\"1\":Int)");
+    let runtime_expression = enclosing
+        .var_expr_ref(&"y".into())
+        .unwrap()
+        .runtime_expression();
     let checked = runtime_expression
         .parse_and_check("1 as Int")
         .expect("a runtime expression with a redundant cast still checks");
-    assert_eq!(checked.expr().to_string(), "(1 as Int)");
+    // Elaboration makes the identity cheap without widening its checked type.
+    assert_eq!(checked.expr().to_string(), "1");
+    assert_eq!(checked.typ(), &crate::core::StreamType::Int);
 }

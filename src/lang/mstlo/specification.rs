@@ -93,11 +93,7 @@ impl Specification for MstloSpecification {
     }
 
     fn type_annotations(&self) -> BTreeMap<VarName, StreamType> {
-        self.input_vars()
-            .into_iter()
-            .chain(self.output_vars())
-            .map(|var| (var, StreamType::Any))
-            .collect()
+        BTreeMap::new()
     }
 }
 
