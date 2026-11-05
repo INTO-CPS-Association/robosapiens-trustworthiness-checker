@@ -1,6 +1,6 @@
-in x
-in d
-in c
+in x: Int
+in d: Int
+in c: Int
 out z
 out v
 out w

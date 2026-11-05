@@ -99,3 +99,26 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
 
     assert!(unexpected.is_empty(), "{}", unexpected.join("\n"));
 }
+
+#[test]
+fn shipped_reconfiguration_commands_parse_check_and_elaborate() {
+    for entry in fs::read_dir("examples/reconf_cmds").expect("reconfiguration example directory") {
+        let path = entry.expect("a reconfiguration example entry").path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("a readable reconfiguration command");
+        let command: serde_json::Value = serde_json::from_str(&contents)
+            .unwrap_or_else(|error| panic!("{} is not valid JSON: {error}", path.display()));
+        let source = command["specification"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{} has no specification string", path.display()));
+        let specification = parse_str(source)
+            .unwrap_or_else(|error| panic!("{} does not parse: {error}", path.display()));
+        assert!(
+            specification.check_and_elaborate().result().is_ok(),
+            "{} fails concrete checking or elaboration",
+            path.display()
+        );
+    }
+}

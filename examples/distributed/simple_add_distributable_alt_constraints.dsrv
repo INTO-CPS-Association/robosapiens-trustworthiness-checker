@@ -1,13 +1,13 @@
 language distributed
 
-in x
-in y
-in z
-in c
-out w
-out v
-out distW
-out distV
+in x: Int
+in y: Int
+in z: Int
+in c: Bool
+out w: Int
+out v: Int
+out distW: Bool
+out distV: Bool
 
 w = x + y
 v = z + w

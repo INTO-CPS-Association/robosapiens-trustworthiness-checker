@@ -1,4 +1,4 @@
-in x
-in e
-out z
+in x: Int
+in e: Int
+out z: Int
 z = update(x, e)

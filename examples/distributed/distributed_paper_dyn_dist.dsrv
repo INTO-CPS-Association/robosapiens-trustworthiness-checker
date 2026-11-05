@@ -3,102 +3,102 @@ language distributed
 // Run with:
 // RUST_LOG=INFO cargo run --features ros -- examples/distributed/distributed_paper_dyn_dist.dsrv --runtime distributed --distribution-graph examples/distributed/distributed_paper_dyn_dist_graph.json --distribution-constraints dist1 dist2 dist3 dist4 --dist-constraint-solver sat --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/distributed_paper_dyn_dist_map.json --output-ros-file examples/distributed/distributed_paper_dyn_dist_out_map.json
 
-in R1Odom
-in R2Odom
-in R3Odom
-in R4Odom
+in R1Odom: Struct<pose: Struct<pose: Struct<position: Struct<x: Float, y: Float, ...>, ...>, ...>, ...>
+in R2Odom: Struct<pose: Struct<pose: Struct<position: Struct<x: Float, y: Float, ...>, ...>, ...>, ...>
+in R3Odom: Struct<pose: Struct<pose: Struct<position: Struct<x: Float, y: Float, ...>, ...>, ...>, ...>
+in R4Odom: Struct<pose: Struct<pose: Struct<position: Struct<x: Float, y: Float, ...>, ...>, ...>, ...>
 
-in ConveyorSystem
-in StackerCrane
-in VerticalLift
-in HorizontalCarousel
+in ConveyorSystem: Int
+in StackerCrane: Int
+in VerticalLift: Int
+in HorizontalCarousel: Int
 
-out CS1Alert
-out CS2Alert
-out CS3Alert
-out CS4Alert
-out SC1Alert
-out SC2Alert
-out SC3Alert
-out SC4Alert
-out VL1Alert
-out VL2Alert
-out VL3Alert
-out VL4Alert
-out HC1Alert
-out HC2Alert
-out HC3Alert
-out HC4Alert
+out CS1Alert: Int
+out CS2Alert: Int
+out CS3Alert: Int
+out CS4Alert: Int
+out SC1Alert: Int
+out SC2Alert: Int
+out SC3Alert: Int
+out SC4Alert: Int
+out VL1Alert: Int
+out VL2Alert: Int
+out VL3Alert: Int
+out VL4Alert: Int
+out HC1Alert: Int
+out HC2Alert: Int
+out HC3Alert: Int
+out HC4Alert: Int
 
 // Axis-aligned bounding box (AABB) of RX and Machine Y
-out aabbR1C 
-out aabbR2C 
-out aabbR3C 
-out aabbR4C 
-out aabbR1S 
-out aabbR2S 
-out aabbR3S 
-out aabbR4S 
-out aabbR1V
-out aabbR2V 
-out aabbR3V 
-out aabbR4V 
-out aabbR1H 
-out aabbR2H 
-out aabbR3H 
-out aabbR4H 
+out aabbR1C: Bool
+out aabbR2C: Bool
+out aabbR3C: Bool
+out aabbR4C: Bool
+out aabbR1S: Bool
+out aabbR2S: Bool
+out aabbR3S: Bool
+out aabbR4S: Bool
+out aabbR1V: Bool
+out aabbR2V: Bool
+out aabbR3V: Bool
+out aabbR4V: Bool
+out aabbR1H: Bool
+out aabbR2H: Bool
+out aabbR3H: Bool
+out aabbR4H: Bool
 
 // Dist constraints
-out dist1
-out dist2
-out dist3
-out dist4
+out dist1: Bool
+out dist2: Bool
+out dist3: Bool
+out dist4: Bool
 
 // Robot positions
-aux R1Pose
-aux R1X
-aux R1Y
-aux R2Pose
-aux R2X
-aux R2Y
-aux R3Pose
-aux R3X
-aux R3Y
-aux R4Pose
-aux R4X
-aux R4Y
+aux R1Pose: Struct<x: Float, y: Float, ...>
+aux R1X: Float
+aux R1Y: Float
+aux R2Pose: Struct<x: Float, y: Float, ...>
+aux R2X: Float
+aux R2Y: Float
+aux R3Pose: Struct<x: Float, y: Float, ...>
+aux R3X: Float
+aux R3Y: Float
+aux R4Pose: Struct<x: Float, y: Float, ...>
+aux R4X: Float
+aux R4Y: Float
 
 // Machine static coords:
-aux CX 
-aux CY 
-aux SX 
-aux SY 
-aux VX 
-aux VY 
-aux HX 
-aux HY 
+aux CX: Float
+aux CY: Float
+aux SX: Float
+aux SY: Float
+aux VX: Float
+aux VY: Float
+aux HX: Float
+aux HY: Float
 
 // AABB constant
-aux D
+aux D: Float
 
-aux CPred
-aux SPred
-aux VPred
-aux HPred
+aux CPred: Bool
+aux SPred: Bool
+aux VPred: Bool
+aux HPred: Bool
 
 // Extract the position of Robots from odometry data
-R1Pose = Map.get(Map.get(Map.get(R1Odom, "pose"), "pose"), "position")
-R1X = Map.get(R1Pose, "x")
-R1Y = Map.get(R1Pose, "y")
-R2Pose = Map.get(Map.get(Map.get(R2Odom, "pose"), "pose"), "position")
-R2X = Map.get(R2Pose, "x")
-R2Y = Map.get(R2Pose, "y")
-R3Pose = Map.get(Map.get(Map.get(R3Odom, "pose"), "pose"), "position")
-R3X = Map.get(R3Pose, "x")
-R3Y = Map.get(R3Pose, "y")
-R4Pose = Map.get(Map.get(Map.get(R4Odom, "pose"), "pose"), "position")
-R4X = Map.get(R4Pose, "x")
-R4Y = Map.get(R4Pose, "y")
+R1Pose = R1Odom.pose.pose.position
+R1X = R1Pose.x
+R1Y = R1Pose.y
+R2Pose = R2Odom.pose.pose.position
+R2X = R2Pose.x
+R2Y = R2Pose.y
+R3Pose = R3Odom.pose.pose.position
+R3X = R3Pose.x
+R3Y = R3Pose.y
+R4Pose = R4Odom.pose.pose.position
+R4X = R4Pose.x
+R4Y = R4Pose.y
 
 // Coordinates of machines (static)
 CX = 3.5

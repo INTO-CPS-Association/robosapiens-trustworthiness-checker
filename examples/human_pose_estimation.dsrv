@@ -1,101 +1,104 @@
-in rawHuman
-out rForearmVelX
-out rForearmVelY
-out rForearmVelZ
-out rForearmRealisticVel
-out hasHumansCp
+type BodyPart = Struct<x: Float, y: Float, z: Float, p_2: Float, ...>
+type Human = Struct<human_id: Int, body_parts: List<BodyPart>, ...>
 
-out DSUAllowed
+in rawHuman: Struct<humans: List<Human>, time: Float, ...>
+out rForearmVelX: Float
+out rForearmVelY: Float
+out rForearmVelZ: Float
+out rForearmRealisticVel: Bool
+out hasHumansCp: Bool
 
-aux humans
-aux hasHumans
-aux hasHumansPrev4
-aux human0
-aux humanId
-aux bodyParts
-aux time
-aux dt
+out DSUAllowed: Bool
 
-aux head
-aux neck
-aux torso
-aux rShoulder
-aux rUpperArm
-aux rElbow
-aux rForearm
-aux rHand
-aux lShoulder
-aux lUpperArm
-aux lElbow
-aux lForearm
-aux lHand
-aux rHip
-aux rThigh
-aux rKnee
-aux rLowerLeg
-aux rFoot
-aux lHip
-aux lThigh
-aux lKnee
-aux lLowerLeg
-aux lFoot
+aux humans: List<Human>
+aux hasHumans: Bool
+aux hasHumansPrev4: Bool
+aux human0: Human
+aux humanId: Int
+aux bodyParts: List<BodyPart>
+aux time: Float
+aux dt: Float
+
+aux head: BodyPart
+aux neck: BodyPart
+aux torso: BodyPart
+aux rShoulder: BodyPart
+aux rUpperArm: BodyPart
+aux rElbow: BodyPart
+aux rForearm: BodyPart
+aux rHand: BodyPart
+aux lShoulder: BodyPart
+aux lUpperArm: BodyPart
+aux lElbow: BodyPart
+aux lForearm: BodyPart
+aux lHand: BodyPart
+aux rHip: BodyPart
+aux rThigh: BodyPart
+aux rKnee: BodyPart
+aux rLowerLeg: BodyPart
+aux rFoot: BodyPart
+aux lHip: BodyPart
+aux lThigh: BodyPart
+aux lKnee: BodyPart
+aux lLowerLeg: BodyPart
+aux lFoot: BodyPart
 
 // Forearm aux
-aux forearmSymEps
-aux forearmSymmetry
-aux rForearmHeight
-aux rForearmHeightSmooth
-aux rForearmDiff
-aux rForearmDiffSmooth
-aux lForearmHeight
-aux lForearmHeightSmooth
-aux lForearmDiff
-aux lForearmDiffSmooth
-aux rForearmConstantLength
-aux lForearmConstantLength
+aux forearmSymEps: Float
+aux forearmSymmetry: Bool
+aux rForearmHeight: Float
+aux rForearmHeightSmooth: Float
+aux rForearmDiff: Float
+aux rForearmDiffSmooth: Float
+aux lForearmHeight: Float
+aux lForearmHeightSmooth: Float
+aux lForearmDiff: Float
+aux lForearmDiffSmooth: Float
+aux rForearmConstantLength: Bool
+aux lForearmConstantLength: Bool
 
 // Forarm velocity
-aux rForearmX
-aux rForearmY
-aux rForearmZ
+aux rForearmX: Float
+aux rForearmY: Float
+aux rForearmZ: Float
 
-humans = Map.get(rawHuman, "humans")
+humans = rawHuman.humans
 hasHumans = List.len(humans) > 0
 hasHumansPrev4 = update(false, hasHumans[1]) && update(false, hasHumans[2]) && update(false, hasHumans[3]) && update(false, hasHumans[4])
-human0 = if hasHumans then List.get(humans, 0) else Map()
-humanId = if hasHumans then Map.get(human0, "human_id") else -1
-bodyParts = if hasHumans then Map.get(human0, "body_parts") else List()
-time = Map.get(rawHuman, "time")
+human0 = if hasHumans then List.get(humans, 0) else {human_id: -1, body_parts: List()}
+humanId = if hasHumans then human0.human_id else -1
+bodyParts = if hasHumans then human0.body_parts else List()
+time = rawHuman.time
 dt = time - time[1]
 
-head = if hasHumans then List.get(bodyParts, 0) else Map()
-neck = if hasHumans then List.get(bodyParts, 1) else Map()
-torso = if hasHumans then List.get(bodyParts, 2) else Map()
-rShoulder = if hasHumans then List.get(bodyParts, 3) else Map()
-rUpperArm = if hasHumans then List.get(bodyParts, 4) else Map()
-rElbow = if hasHumans then List.get(bodyParts, 5) else Map()
-rForearm = if hasHumans then List.get(bodyParts, 6) else Map()
-rHand = if hasHumans then List.get(bodyParts, 7) else Map()
-lShoulder = if hasHumans then List.get(bodyParts, 8) else Map()
-lUpperArm = if hasHumans then List.get(bodyParts, 9) else Map()
-lElbow = if hasHumans then List.get(bodyParts, 10) else Map()
-lForearm = if hasHumans then List.get(bodyParts, 11) else Map()
-lHand = if hasHumans then List.get(bodyParts, 12) else Map()
-rHip = if hasHumans then List.get(bodyParts, 13) else Map()
-rThigh = if hasHumans then List.get(bodyParts, 14) else Map()
-rKnee = if hasHumans then List.get(bodyParts, 15) else Map()
-rLowerLeg = if hasHumans then List.get(bodyParts, 16) else Map()
-rFoot = if hasHumans then List.get(bodyParts, 17) else Map()
-lHip = if hasHumans then List.get(bodyParts, 18) else Map()
-lThigh = if hasHumans then List.get(bodyParts, 19) else Map()
-lKnee = if hasHumans then List.get(bodyParts, 20) else Map()
-lLowerLeg = if hasHumans then List.get(bodyParts, 21) else Map()
-lFoot = if hasHumans then List.get(bodyParts, 22) else Map()
+head = if hasHumans then List.get(bodyParts, 0) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+neck = if hasHumans then List.get(bodyParts, 1) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+torso = if hasHumans then List.get(bodyParts, 2) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rShoulder = if hasHumans then List.get(bodyParts, 3) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rUpperArm = if hasHumans then List.get(bodyParts, 4) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rElbow = if hasHumans then List.get(bodyParts, 5) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rForearm = if hasHumans then List.get(bodyParts, 6) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rHand = if hasHumans then List.get(bodyParts, 7) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lShoulder = if hasHumans then List.get(bodyParts, 8) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lUpperArm = if hasHumans then List.get(bodyParts, 9) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lElbow = if hasHumans then List.get(bodyParts, 10) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lForearm = if hasHumans then List.get(bodyParts, 11) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lHand = if hasHumans then List.get(bodyParts, 12) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rHip = if hasHumans then List.get(bodyParts, 13) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rThigh = if hasHumans then List.get(bodyParts, 14) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rKnee = if hasHumans then List.get(bodyParts, 15) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rLowerLeg = if hasHumans then List.get(bodyParts, 16) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+rFoot = if hasHumans then List.get(bodyParts, 17) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lHip = if hasHumans then List.get(bodyParts, 18) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lThigh = if hasHumans then List.get(bodyParts, 19) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lKnee = if hasHumans then List.get(bodyParts, 20) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lLowerLeg = if hasHumans then List.get(bodyParts, 21) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
+lFoot = if hasHumans then List.get(bodyParts, 22) else {x: 0.0, y: 0.0, z: 0.0, p_2: 0.0}
 
 // Forearm symmetry check
 forearmSymEps = 0.1
-rForearmHeight = if hasHumans then Map.get(rForearm, "p_2") else -1.0
-lForearmHeight = if hasHumans then Map.get(lForearm, "p_2") else -1.0
+rForearmHeight = if hasHumans then rForearm.p_2 else -1.0
+lForearmHeight = if hasHumans then lForearm.p_2 else -1.0
 forearmSymmetry = if hasHumans then abs(rForearmHeight - lForearmHeight) < forearmSymEps else true
 
 // Smooth forearm height - averaged over 4 samples
@@ -111,9 +114,9 @@ lForearmDiffSmooth = if hasHumans then update(0.0, lForearmHeightSmooth - lForea
 lForearmConstantLength = abs(lForearmDiff) < 0.1 && abs(lForearmDiffSmooth) < 0.1
 
 // Forearm Velocity:
-rForearmX = if hasHumans then Map.get(rForearm, "x") else update(0.0, rForearmX[1])
-rForearmY = if hasHumans then Map.get(rForearm, "y") else update(0.0, rForearmY[1])
-rForearmZ = if hasHumans then Map.get(rForearm, "z") else update(0.0, rForearmZ[1])
+rForearmX = if hasHumans then rForearm.x else update(0.0, rForearmX[1])
+rForearmY = if hasHumans then rForearm.y else update(0.0, rForearmY[1])
+rForearmZ = if hasHumans then rForearm.z else update(0.0, rForearmZ[1])
 rForearmVelX = update(0.0, (rForearmX - rForearmX[1]) / dt)
 rForearmVelY = update(0.0, (rForearmY - rForearmY[1]) / dt)
 rForearmVelZ = update(0.0, (rForearmZ - rForearmZ[1]) / dt)

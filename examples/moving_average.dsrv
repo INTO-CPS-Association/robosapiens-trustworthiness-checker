@@ -1,5 +1,5 @@
-in x
-out y
+in x: Int
+out y: Int
 // Recursive MA filter with M = 3
 y = default(y[1], 0) + (x - default(x[3], 0)) / 3
 // Simple MA filter with taps M = 3

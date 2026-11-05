@@ -1,2 +1,2 @@
-out z
+out z: Int
 z = default(z[1], 0) + 1

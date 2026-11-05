@@ -1,4 +1,4 @@
-in x
-in e
-out z
+in x: Int
+in e: Str
+out z: Str
 z = default(e, "def_value")

@@ -1,12 +1,12 @@
 // Notation follows "Using temporal logic to specify adaptive program semantics" paper
 // Use input file "altl_dup.input"
-in x
-in T
-out R
-out c
-out Td
-out S
-out v
+in x: Int
+in T: Expr<Int>
+out R: Bool
+out c: Bool
+out Td: Int
+out S: Int
+out v: Int
 // Guided adaptation:
 // Old spec is just S = x
 S = x

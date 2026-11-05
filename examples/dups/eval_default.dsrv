@@ -1,5 +1,6 @@
 // Use input file `eval.input`
-in x
-in e
-out z
-z = eval(default(e, "x")) // On steps where e=Deferred, evaluate to eval("x")
+in x: Int
+in e: Expr<Int>
+out z: Int
+aux fallback: Expr<Int> = "x"
+z = eval(default(e, fallback)) // On steps where e=Deferred, evaluate to eval("x")

@@ -1,24 +1,28 @@
 language distributed
 
-// Run with: cargo run -- examples/distributed/mqtt_dist_echo.dsrv --input-map-mqtt-topics tb1 tb2 tb3 --output-mqtt-topics tb1Echo tb2Echo tb3Echo tb1SourceRobotId tb1NearbyRobotIds tb1NearbyRobotPoses tb1SourceRobotPose tb1Timestamp
-in tb1
-in tb2
-in tb3
-out tb1Echo
-out tb2Echo
-out tb3Echo
-out tb1SourceRobotId
-out tb1NearbyRobotIds
-out tb1NearbyRobotPoses
-out tb1SourceRobotPose
-out tb1Timestamp
-out graphConstraint1
-out graphConstraint2
-tb1NearbyRobotIds = List.get(List.get(tb1, 0), 1)
-tb1NearbyRobotPoses = List.get(List.get(tb1, 1), 1)
-tb1SourceRobotId= List.get(List.get(tb1, 2), 1)
-tb1SourceRobotPose = List.get(List.get(tb1, 3), 1)
-tb1Timestamp = List.get(List.get(tb1, 4), 1)
+// Inspect with: cargo run --bin tc-expand -- --check examples/distributed/mqtt_dist_echo_graph.dsrv
+// graphConstraint2 permits tb2Echo centrally or colocated with tb3Echo on tb2.
+type Pose = Struct<position: Struct<x: Float, y: Float, z: Float, ...>, orientation: Struct<x: Float, y: Float, z: Float, w: Float, ...>, ...>
+type RobotData = Struct<nearby_robot_ids: List<Str>, nearby_robot_poses: List<Pose>, source_robot_id: Str, source_robot_pose: Pose, timestamp: Float, ...>
+
+in tb1: RobotData
+in tb2: RobotData
+in tb3: RobotData
+out tb1Echo: RobotData
+out tb2Echo: RobotData
+out tb3Echo: RobotData
+out tb1SourceRobotId: Str
+out tb1NearbyRobotIds: List<Str>
+out tb1NearbyRobotPoses: List<Pose>
+out tb1SourceRobotPose: Pose
+out tb1Timestamp: Float
+out graphConstraint1: Bool
+out graphConstraint2: Bool
+tb1NearbyRobotIds = tb1.nearby_robot_ids
+tb1NearbyRobotPoses = tb1.nearby_robot_poses
+tb1SourceRobotId = tb1.source_robot_id
+tb1SourceRobotPose = tb1.source_robot_pose
+tb1Timestamp = tb1.timestamp
 tb1Echo = tb1
 tb2Echo = tb2
 tb3Echo = tb3

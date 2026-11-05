@@ -1,7 +1,7 @@
 // Run with input file simple_add_async.input
-in x
-in y
-out a
-out b
+in x: Int
+in y: Int
+out a: Int
+out b: Int
 a = latch(x, y)
 b = a + 1

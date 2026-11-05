@@ -1,51 +1,51 @@
 // Run with:
 // cargo run --profile dev-fast --features ros -- examples/distributed/distributed_paper_r4.dsrv --input-ros-file examples/distributed/distributed_paper_r4_map.json/ 
 
-in R4Odom
+in R4Odom: Struct<pose: Struct<pose: Struct<position: Struct<x: Float, y: Float, ...>, ...>, ...>, ...>
 
-in ConveyorSystem
-in StackerCrane
-in VerticalLift
-in HorizontalCarousel
+in ConveyorSystem: Int
+in StackerCrane: Int
+in VerticalLift: Int
+in HorizontalCarousel: Int
 
-out CS4Alert
-out SC4Alert
-out VL4Alert
-out HC4Alert
+out CS4Alert: Int
+out SC4Alert: Int
+out VL4Alert: Int
+out HC4Alert: Int
 
 // Axis-aligned bounding box (AABB) of RX and Machine Y
-out aabbR4C 
-out aabbR4S 
-out aabbR4V
-out aabbR4H 
+out aabbR4C: Bool
+out aabbR4S: Bool
+out aabbR4V: Bool
+out aabbR4H: Bool
 
 // Robot positions
-aux R4Pose
-aux R4X
-aux R4Y
+aux R4Pose: Struct<x: Float, y: Float, ...>
+aux R4X: Float
+aux R4Y: Float
 
 // Machine static coords:
-aux CX 
-aux CY 
-aux SX 
-aux SY 
-aux VX 
-aux VY 
-aux HX 
-aux HY 
+aux CX: Float
+aux CY: Float
+aux SX: Float
+aux SY: Float
+aux VX: Float
+aux VY: Float
+aux HX: Float
+aux HY: Float
 
 // AABB constant
-aux D
+aux D: Float
 
-aux CPred
-aux SPred
-aux VPred
-aux HPred
+aux CPred: Bool
+aux SPred: Bool
+aux VPred: Bool
+aux HPred: Bool
 
 // Extract the position of Robots from odometry data
-R4Pose = Map.get(Map.get(Map.get(R4Odom, "pose"), "pose"), "position")
-R4X = Map.get(R4Pose, "x")
-R4Y = Map.get(R4Pose, "y")
+R4Pose = R4Odom.pose.pose.position
+R4X = R4Pose.x
+R4Y = R4Pose.y
 
 // Coordinates of machines (static)
 CX = 3.5

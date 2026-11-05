@@ -1,5 +1,5 @@
 // Use input file `eval.input`
-in x
-in e
-out z
+in x: Int
+in e: Expr<Int>
+out z: Bool
 z = is_defined(e)

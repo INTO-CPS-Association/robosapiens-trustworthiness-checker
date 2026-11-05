@@ -2,7 +2,7 @@
 // cargo run --profile dev-fast --features ros -- examples/pal_human_waypoint_safety.dsrv --input-file <trace-file>
 
 in new_data: Struct<event: Str, uid: Str, ...>
-in robot_1_waypoints: Struct<robot_id: Int, poses: List<Struct<x: Float, y: Float>>, ...>
+in robot_1_waypoints: Struct<robot_id: Int, poses: List<Struct<x: Float, y: Float, ...>>, ...>
 
 out human_count: Int
 
@@ -11,7 +11,7 @@ out the_data: Struct<event: Str, uid: Str, ...>
 out human_limit: Bool
 out first_waypoint_in_limits: Bool
 out all_waypoints_in_limits: Bool
-// out robot_1_waypoints_out: Struct<robot_id: Int, poses: List<Struct<x: Float, y: Float>>, ...>
+// out robot_1_waypoints_out: Struct<robot_id: Int, poses: List<Struct<x: Float, y: Float, ...>>, ...>
 
 humans = if new_data.event == "human" && !default(new_data.uid == humans[1].uid, false)
          then {uid: new_data.uid}
@@ -23,7 +23,7 @@ human_limit = human_count < 5
 
 the_data = new_data
 
-all_waypoints_in_limits = List.fold(\acc: Bool, pose: Struct<x: Float, y: Float> ->
+all_waypoints_in_limits = List.fold(\acc: Bool, pose: Struct<x: Float, y: Float, ...> ->
                              acc
                              && pose.x <= 10.0
                              && pose.y <= 10.0

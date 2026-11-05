@@ -1,20 +1,23 @@
-// Run with: cargo run -- examples/distributed/mqtt_dist_echo.dsrv --input-mqtt-topics tb1 tb2 tb3 --output-mqtt-topics tb1Echo tb2Echo tb3Echo tb1SourceRobotId tb1NearbyRobotIds tb1NearbyRobotPoses tb1SourceRobotPose tb1Timestamp
-in tb1
-in tb2
-in tb3
-out tb1Echo
-out tb2Echo
-out tb3Echo
-out tb1SourceRobotId
-out tb1NearbyRobotIds
-out tb1NearbyRobotPoses
-out tb1SourceRobotPose
-out tb1Timestamp
-tb1NearbyRobotIds = Map.get(tb1, "nearby_robot_ids")
-tb1NearbyRobotPoses = Map.get(tb1, "nearby_robot_poses")
-tb1SourceRobotId = Map.get(tb1, "source_robot_id")
-tb1SourceRobotPose = Map.get(tb1, "source_robot_pose")
-tb1Timestamp = Map.get(tb1, "timestamp")
+// Run with: cargo run -- examples/distributed/mqtt_dist_echo.dsrv --mqtt-input --mqtt-output
+type Pose = Struct<position: Struct<x: Float, y: Float, z: Float, ...>, orientation: Struct<x: Float, y: Float, z: Float, w: Float, ...>, ...>
+type RobotData = Struct<nearby_robot_ids: List<Str>, nearby_robot_poses: List<Pose>, source_robot_id: Str, source_robot_pose: Pose, timestamp: Float, ...>
+
+in tb1: RobotData
+in tb2: RobotData
+in tb3: RobotData
+out tb1Echo: RobotData
+out tb2Echo: RobotData
+out tb3Echo: RobotData
+out tb1SourceRobotId: Str
+out tb1NearbyRobotIds: List<Str>
+out tb1NearbyRobotPoses: List<Pose>
+out tb1SourceRobotPose: Pose
+out tb1Timestamp: Float
+tb1NearbyRobotIds = tb1.nearby_robot_ids
+tb1NearbyRobotPoses = tb1.nearby_robot_poses
+tb1SourceRobotId = tb1.source_robot_id
+tb1SourceRobotPose = tb1.source_robot_pose
+tb1Timestamp = tb1.timestamp
 tb1Echo = tb1
 tb2Echo = tb2
 tb3Echo = tb3

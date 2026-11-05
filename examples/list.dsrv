@@ -1,11 +1,11 @@
-in iList
-out oList
-out nestedList
-out listIndex
-out listAppend
-out listConcat
-out listHead
-out listTail
+in iList: List<Int>
+out oList: List<Int>
+out nestedList: List<List<Int>>
+out listIndex: Int
+out listAppend: List<Int>
+out listConcat: List<Int>
+out listHead: Int
+out listTail: List<Int>
 oList = iList
 nestedList = List(iList, iList)
 listIndex = List.get(iList, 0)

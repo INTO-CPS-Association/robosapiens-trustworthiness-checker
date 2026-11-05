@@ -1,18 +1,18 @@
 // Run with: cargo run --features ros --profile dev-fast -- --input-ros-topics examples/iff_dsu_map.json examples/iff_dsu.dsrv
 // Cameras encoded as: true == use the left camera (ORBBEC). false = use the right camera (Intel)
-in rawHuman
-in useNucOne
-in reqUseNucOne
-out hasError
-out hadError
-out cameraSwap
-out swapRequest
-out swapRequestSticky
-out safeSwap
-aux swapRequestHelper
-aux numberOfHumans
+in rawHuman: Struct<number_of_humans: Int, ...>
+in useNucOne: Bool
+in reqUseNucOne: Bool
+out hasError: Bool
+out hadError: Bool
+out cameraSwap: Bool
+out swapRequest: Bool
+out swapRequestSticky: Bool
+out safeSwap: Bool
+aux swapRequestHelper: Bool
+aux numberOfHumans: Int
 
-numberOfHumans = Map.get(rawHuman, "number_of_humans")
+numberOfHumans = rawHuman.number_of_humans
 swapRequest = !(reqUseNucOne == default(reqUseNucOne[1], true))
 swapRequestHelper = if cameraSwap then swapRequest else default(swapRequestHelper[1], swapRequest)
 swapRequestSticky = default(swapRequestHelper[1], false) || swapRequest

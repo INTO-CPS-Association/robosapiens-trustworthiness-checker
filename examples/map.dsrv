@@ -1,10 +1,10 @@
-in iMap
-out oMap
-out nestedMap
-out mapGet
-out mapRemove
-out mapInsert
-out mapHasKey
+in iMap: Map<Int>
+out oMap: Map<Int>
+out nestedMap: Map<Map<Int>>
+out mapGet: Int
+out mapRemove: Map<Int>
+out mapInsert: Map<Int>
+out mapHasKey: Bool
 oMap = iMap
 nestedMap = Map("a": iMap, "b": iMap)
 mapGet = Map.get(iMap, "x")

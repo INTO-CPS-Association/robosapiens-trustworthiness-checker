@@ -1,6 +1,6 @@
 // Use input file `eval.input`
-in x
-in e
-out z
+in x: Int
+in e: Expr<Int>
+out z: Int
 // Yield -42 whenever e doesn't have a value
-z = eval(default(e, "-42"))
+z = eval(default(e, "-42" as Expr<Int>))

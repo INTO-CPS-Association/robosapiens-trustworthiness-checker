@@ -1,5 +1,5 @@
 // Use input file "simple_add.input"
-in x
-in y
-out z
+in x: Int
+in y: Int
+out z: Int
 z = if x == 0 then y else 42
