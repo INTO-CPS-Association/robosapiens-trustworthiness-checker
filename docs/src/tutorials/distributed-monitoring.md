@@ -14,7 +14,7 @@ Run from the repository root with Rust/Cargo available. The DSRV program first a
 in x: Int
 in y: Int
 in z: Int
-in c: Any
+in c: Bool
 out w: Int
 out v: Int
 

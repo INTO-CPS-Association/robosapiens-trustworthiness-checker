@@ -1,4 +1,0 @@
-in x: Int
-in y: Int
-out z: Int
-z = x + y

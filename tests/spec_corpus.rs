@@ -41,11 +41,8 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
         paths.len()
     );
 
-    // The constraints fragment is not a specification; the literal fixture is deliberately invalid.
-    const NOT_ACCEPTED: [&str; 2] = [
-        "examples/simple_add_distributable_dist_constraints.dsrv",
-        "tests/fixtures/dsrv_syntax_revision_invalid_literal.dsrv",
-    ];
+    // This fixture's literal is deliberately invalid.
+    const NOT_ACCEPTED: [&str; 1] = ["tests/fixtures/dsrv_syntax_revision_invalid_literal.dsrv"];
 
     // Fixtures that are ill-typed on purpose, to test that checking rejects
     // them.

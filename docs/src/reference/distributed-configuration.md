@@ -32,7 +32,7 @@ The distributed addition example computes an intermediate sum `w`, then uses it 
 in x: Int
 in y: Int
 in z: Int
-in c: Any
+in c: Bool
 out w: Int
 out v: Int
 

@@ -1,9 +1,0 @@
-in x: Int
-in d: Int
-in c: Int
-out z
-out v
-out w
-z = x
-v = c <= 200
-w = d <= 100

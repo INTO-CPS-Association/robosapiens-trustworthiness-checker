@@ -51,9 +51,9 @@ in y: Int
 out z: Int
 z = x + y
 ```
-which is recorded in `examples/simple_add_typed.dsrv`, we can run the specification under the causal semantics via,
+which is recorded in `examples/simple_add.dsrv`, we can run the specification under the causal semantics via,
 ```sh
-cargo run -- examples/simple_add_typed.dsrv \
+cargo run -- examples/simple_add.dsrv \
   --input-file examples/simple_add.input \
   --semantics causal --runtime semi-sync --output-stdout
 ```
