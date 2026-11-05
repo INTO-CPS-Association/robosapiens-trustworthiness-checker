@@ -1,42 +1,41 @@
-//! Every `const` of a program, folded to the literal it stands for.
+//! Fold literal, arithmetic and container constants once at load time.
 //!
-//! A constant is not a def of no arguments. A def's body travels as a tree
-//! and is copied into each caller; a constant's body is **evaluated
-//! once**, and what it yields is a value. The difference is forced by where
-//! a constant has to be usable: a stream offset `x[n]` holds a number, not
-//! a subtree, so nothing that only copies trees could put a constant there.
-//!
-//! Folding borrows the runtime's own arithmetic rather than repeating it,
-//! so a constant and the same expression written out agree by construction,
-//! and `1 / 0` is refused while the program is still being read.
-//!
-//! Entries are built in the dependency order the namespaces are, since a
-//! constant follows the same `use` edges as a type or a def.
+//! Initializers are checked at their declared types before folding. Each use
+//! retains that type, so a named constant never becomes a fresh literal.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use contiguous_tree::TreeCursor;
+use contiguous_tree::{TreeCursor, TreeCursorExt};
 
 use crate::VarName;
-use crate::core::values::operations;
-use crate::lang::dsrv::ast::{AstShared, SyntaxLiteral};
+use crate::core::{StreamType, Value};
+use crate::lang::dsrv::ast::{AstShared, DsrvAstError, ExprBuilder, ExprKind, SyntaxLiteral};
 use crate::lang::dsrv::modules::{ModulePath, ModuleSources};
 use crate::lang::dsrv::path::ModuleName;
 use crate::lang::dsrv::source::SourceContext;
-use crate::lang::dsrv::span::Span;
+use crate::lang::dsrv::source_map::{SourceArchive, SourceId};
 use crate::lang::dsrv::syntax::parsed::{self, ParsedExprKind, ParsedExprRef};
 use crate::lang::dsrv::syntax::{ParsedDeclaration, ParsedSpecification};
-use crate::lang::dsrv::type_checker::check_value_stream_type;
+use crate::lang::dsrv::type_checker::check_and_elaborate_expression;
 
-use super::graph::ModuleGraph;
-use super::{DsrvExpandError, functions, graph};
+use super::functions;
+use super::graph::{self, ModuleGraph};
+use super::inline;
+use super::{DsrvExpandError, language};
 
 /// One constant, already folded.
 #[derive(Debug)]
 pub(crate) struct ConstEntry {
     /// Hidden from importers, usable inside its own module.
     pub(crate) internal: bool,
-    pub(crate) value: SyntaxLiteral,
+    pub(crate) value: TypedConstant,
+}
+
+/// A normalized constant retains its declared type at every use.
+#[derive(Clone, Debug)]
+pub(crate) struct TypedConstant {
+    pub(crate) literal: SyntaxLiteral,
+    pub(crate) typ: AstShared<StreamType>,
 }
 
 /// Every constant of a program, by the module that declared it.
@@ -87,7 +86,14 @@ pub(crate) fn build_constant_table(
             .and_then(|source| sources.archive().file(source))
             .map(|file| file.label().to_string())
             .unwrap_or_else(|| crate::lang::dsrv::modules::show_path(&path));
-        add_module(&mut table, &path, parsed, context, &source)?;
+        add_module(
+            &mut table,
+            &path,
+            parsed,
+            context,
+            Some(sources.archive()),
+            &source,
+        )?;
     }
     Ok(table)
 }
@@ -96,10 +102,18 @@ pub(crate) fn build_constant_table(
 /// until it takes on modules. The file is its own root module.
 pub(crate) fn single_file_constants(
     parsed: &ParsedSpecification,
-    context: &SourceContext,
+    context: &AstShared<SourceContext>,
+    archive: Option<&SourceArchive>,
 ) -> Result<ConstantTable, DsrvExpandError> {
     let mut table = ConstantTable::default();
-    add_module(&mut table, &ModulePath::new(), parsed, context, "<string>")?;
+    add_module(
+        &mut table,
+        &ModulePath::new(),
+        parsed,
+        context,
+        archive,
+        "<string>",
+    )?;
     Ok(table)
 }
 
@@ -112,7 +126,8 @@ fn add_module(
     table: &mut ConstantTable,
     path: &ModulePath,
     parsed: &ParsedSpecification,
-    context: &SourceContext,
+    context: &AstShared<SourceContext>,
+    archive: Option<&SourceArchive>,
     source: &str,
 ) -> Result<(), DsrvExpandError> {
     let declarations = parsed.declarations();
@@ -124,17 +139,11 @@ fn add_module(
     for declaration in declarations {
         match declaration {
             ParsedDeclaration::Const {
-                name,
-                ty,
-                internal,
-                span,
-                ..
+                name, ty, internal, ..
             } => {
-                let typ = context.resolve_type(ty).map_err(|error| {
-                    let _ = span;
-                    error
-                })?;
-                local.push((name.clone(), root, *internal, typ, *span));
+                language::check_experiment_type(ty, context.language())?;
+                let typ = context.resolve_type(ty)?;
+                local.push((name.clone(), root, *internal, typ));
                 root += 1;
             }
             ParsedDeclaration::Def { .. }
@@ -151,7 +160,12 @@ fn add_module(
     // What this module's own bodies may name: its imports, then its own
     // constants, so a local name wins as it does for types.
     let imported = functions::imported_modules(path, declarations)?;
-    let mut scope = ConstScope::default();
+    let mut scope = ConstScope {
+        own: path.clone(),
+        bare: BTreeMap::new(),
+        qualified: BTreeMap::new(),
+        local: BTreeSet::new(),
+    };
     for (module, bare) in &imported {
         for (name, entry) in table.exported(module) {
             if *bare {
@@ -165,29 +179,27 @@ fn add_module(
 
     // A constant may be written before or after the one it names, so the
     // bodies are folded by need rather than in declaration order.
-    let pending: BTreeMap<VarName, usize> = local
-        .iter()
-        .map(|(name, index, ..)| (name.clone(), *index))
-        .collect();
+    let folder = Folder {
+        pending: local
+            .iter()
+            .map(|(name, index, _, typ)| (name.clone(), (*index, typ)))
+            .collect(),
+        trees: &trees,
+        source: parsed.source(),
+        context,
+        archive,
+        label: source,
+    };
     let mut active = Vec::new();
     for (name, ..) in &local {
-        fold_pending(name, &pending, &trees, &mut scope, &mut active)?;
+        folder.fold_pending(name, &mut scope, &mut active)?;
     }
-    for (name, _, internal, expected, span) in local {
+    for (name, _, internal, _) in local {
         let value = scope
             .bare
             .get(&name)
             .expect("every local constant was folded")
             .clone();
-        check_value_stream_type(&expected, &value.clone().into_runtime_value()).map_err(
-            |message| DsrvExpandError::ConstantType {
-                name: name.to_string(),
-                location: source.to_owned(),
-                expected,
-                message,
-                span,
-            },
-        )?;
         table
             .entries
             .insert((path.clone(), name), ConstEntry { internal, value });
@@ -195,169 +207,266 @@ fn add_module(
     Ok(())
 }
 
-/// Fold one of this module's own constants, and whatever it names, first.
-fn fold_pending(
-    name: &VarName,
-    pending: &BTreeMap<VarName, usize>,
-    trees: &[ParsedExprRef<'_>],
-    scope: &mut ConstScope,
-    active: &mut Vec<VarName>,
-) -> Result<(), DsrvExpandError> {
-    if scope.local.contains(name) {
-        return Ok(());
-    }
-    let Some(index) = pending.get(name) else {
-        return Ok(());
-    };
-    if active.contains(name) {
-        return Err(DsrvExpandError::RecursiveConstant {
-            name: name.name().to_string(),
-        });
-    }
-    active.push(name.clone());
-    // Whatever this body names must be folded before it is.
-    let body = trees[*index];
-    for named in named_in(body) {
-        fold_pending(&named, pending, trees, scope, active)?;
-    }
-    let value = fold(body, scope)?;
-    active.pop();
-    scope.local.insert(name.clone());
-    scope.bare.insert(name.clone(), value);
-    Ok(())
+/// The pending constants and typing namespace of one module.
+struct Folder<'a, 'tree> {
+    pending: BTreeMap<VarName, (usize, &'a StreamType)>,
+    trees: &'a [ParsedExprRef<'tree>],
+    source: Option<SourceId>,
+    context: &'a AstShared<SourceContext>,
+    archive: Option<&'a SourceArchive>,
+    label: &'a str,
 }
 
-/// Every bare name a body mentions, which is what it might be built from.
-fn named_in(cursor: ParsedExprRef<'_>) -> Vec<VarName> {
-    let mut found = Vec::new();
-    if let ParsedExprKind::Var(name) = cursor.kind() {
-        found.push(name.clone());
+impl Folder<'_, '_> {
+    /// Fold one of this module's own constants, and whatever it names,
+    /// first.
+    fn fold_pending(
+        &self,
+        name: &VarName,
+        scope: &mut ConstScope,
+        active: &mut Vec<VarName>,
+    ) -> Result<(), DsrvExpandError> {
+        if scope.local.contains(name) {
+            return Ok(());
+        }
+        let Some((index, expected)) = self.pending.get(name) else {
+            return Ok(());
+        };
+        if active.contains(name) {
+            return Err(DsrvExpandError::RecursiveConstant {
+                name: name.name().to_string(),
+            });
+        }
+        active.push(name.clone());
+        let body = self.trees[*index];
+        for node in body.postorder() {
+            if let Some(construct) = unsupported(node.kind()) {
+                return Err(DsrvExpandError::NotConstant {
+                    construct,
+                    span: parsed::span_of(node),
+                });
+            }
+        }
+        for node in body.postorder() {
+            let named = match node.kind() {
+                ParsedExprKind::Var(name) => Some(name),
+                ParsedExprKind::ModuleItem(path) if path.module() == scope.own.as_slice() => {
+                    Some(path.name())
+                }
+                _ => None,
+            };
+            if let Some(named) = named {
+                self.fold_pending(named, scope, active)?;
+            }
+        }
+        let literal = self.fold_checked(name, body, expected, scope)?;
+        let value = TypedConstant {
+            literal,
+            typ: AstShared::new((*expected).clone()),
+        };
+        active.pop();
+        scope.local.insert(name.clone());
+        scope.bare.insert(name.clone(), value);
+        Ok(())
     }
-    for child in cursor.child_ids() {
-        found.extend(named_in(cursor.child(child)));
+
+    /// Resolve, check, elaborate and evaluate a constant as an equation.
+    fn fold_checked(
+        &self,
+        name: &VarName,
+        body: ParsedExprRef<'_>,
+        expected: &StreamType,
+        scope: &ConstScope,
+    ) -> Result<SyntaxLiteral, DsrvExpandError> {
+        let span = parsed::span_of(body);
+        let inline_scope = inline::Scope {
+            constants: Some(scope),
+            ..Default::default()
+        };
+        let inlined = inline::standalone(body, &inline_scope, [])?;
+        let mut builder = ExprBuilder::with_capacity(inlined.as_ref().subtree_ids().len());
+        let root = super::expand_tree(
+            inlined.as_ref(),
+            &mut builder,
+            self.context,
+            None,
+            self.source,
+        )?;
+        let expr = builder.finish(root).map_err(DsrvAstError::from)?;
+        if let Some(key) = expr.as_ref().duplicate_field() {
+            return Err(DsrvAstError::DuplicateExpressionField { field: key.clone() }.into());
+        }
+        let language = self.context.language();
+        for node in expr.as_ref().postorder() {
+            let written = node
+                .source_context()
+                .map_or(language, SourceContext::language);
+            language::check_experiment_node(node, written)?;
+            language::check_dialect_node(node, language.dialect())?;
+        }
+        // Any remaining name refers to a stream or is undeclared.
+        if let Some(free) = expr.as_ref().free_variables().into_iter().next() {
+            let at = expr
+                .as_ref()
+                .postorder()
+                .find(|node| matches!(node.kind(), ExprKind::Var(name) if *name == free))
+                .map_or(span, |node| node.span());
+            return Err(DsrvExpandError::UnknownConstant {
+                name: free.name().to_string(),
+                span: at,
+            });
+        }
+
+        let checked = check_and_elaborate_expression(
+            expr,
+            expected,
+            &AstShared::new(BTreeMap::new()),
+            self.archive,
+        )
+        .discard_warnings()
+        .map_err(|errors| DsrvExpandError::ConstantCheck {
+            name: name.to_string(),
+            location: self.label.to_owned(),
+            errors,
+            span,
+        })?;
+
+        let value = crate::semantics::untimed_dsrv::atemporal::eval_atemporal(
+            checked.expr().as_ref(),
+            &BTreeMap::new(),
+        )
+        .map_err(|error| DsrvExpandError::ConstantValue {
+            message: error.to_string(),
+            span,
+        })?;
+        literal_of(value, Some(expected))
+            .map_err(|message| DsrvExpandError::ConstantValue { message, span })
     }
-    found
 }
 
-/// What a constant's body may name.
-#[derive(Default)]
-struct ConstScope {
-    bare: BTreeMap<VarName, SyntaxLiteral>,
-    qualified: BTreeMap<(Vec<ModuleName>, VarName), SyntaxLiteral>,
-    /// The names this module declared itself, which have been folded.
-    local: std::collections::BTreeSet<VarName>,
-}
-
-/// Fold one body to the literal it stands for, refusing anything that is
-/// not settled where the file is read.
-fn fold(cursor: ParsedExprRef<'_>, scope: &ConstScope) -> Result<SyntaxLiteral, DsrvExpandError> {
-    let span = parsed::span_of(cursor);
-    let refuse = |construct: &'static str| DsrvExpandError::NotConstant { construct, span };
-    Ok(match cursor.kind() {
-        ParsedExprKind::Val(value) => value.clone(),
-        ParsedExprKind::Var(name) => {
-            scope
-                .bare
-                .get(name)
-                .cloned()
-                .ok_or_else(|| DsrvExpandError::UnknownConstant {
-                    name: name.name().to_string(),
-                    span,
-                })?
-        }
-        ParsedExprKind::ModuleItem(path) => scope
-            .qualified
-            .get(&(path.module().to_vec(), path.name().clone()))
-            .cloned()
-            .ok_or_else(|| DsrvExpandError::UnknownConstant {
-                name: path.to_string(),
-                span,
-            })?,
-        ParsedExprKind::BinOp(left, right, operator) => {
-            let left = fold(cursor.child(*left), scope)?;
-            let right = fold(cursor.child(*right), scope)?;
-            evaluated(
-                operations::binary(*operator, left.into(), right.into()),
-                span,
-            )?
-        }
-        ParsedExprKind::Not(value) => {
-            let value = fold(cursor.child(*value), scope)?;
-            evaluated(
-                operations::unary(crate::core::UnaryOperator::Not, value.into()),
-                span,
-            )?
-        }
-        ParsedExprKind::Neg(value) => {
-            let value = fold(cursor.child(*value), scope)?;
-            evaluated(
-                operations::unary(crate::core::UnaryOperator::Negate, value.into()),
-                span,
-            )?
-        }
-        ParsedExprKind::List(items) => SyntaxLiteral::List(
-            items
-                .iter()
-                .map(|item| fold(cursor.child(*item), scope))
-                .collect::<Result<_, _>>()?,
-        ),
-        ParsedExprKind::Tuple(items) => SyntaxLiteral::Tuple(
-            items
-                .iter()
-                .map(|item| fold(cursor.child(*item), scope))
-                .collect::<Result<_, _>>()?,
-        ),
-        ParsedExprKind::Map(fields) => SyntaxLiteral::Map(
-            fields
-                .iter()
-                .map(|(key, id)| Ok((key.clone(), fold(cursor.child(*id), scope)?)))
-                .collect::<Result<_, DsrvExpandError>>()?,
-        ),
-        ParsedExprKind::Struct(fields) | ParsedExprKind::ObjectLiteral(fields) => {
-            SyntaxLiteral::Struct(
-                fields
-                    .iter()
-                    .map(|(key, id)| Ok((key.clone(), fold(cursor.child(*id), scope)?)))
-                    .collect::<Result<_, DsrvExpandError>>()?,
-            )
-        }
-        ParsedExprKind::SIndex(..) => return Err(refuse("a stream offset")),
-        ParsedExprKind::Apply(..) | ParsedExprKind::Partial(..) => {
-            return Err(refuse("a call"));
-        }
-        ParsedExprKind::Lambda(..) | ParsedExprKind::Fix(..) => {
-            return Err(refuse("a function"));
-        }
-        ParsedExprKind::Dynamic(..) | ParsedExprKind::Defer(..) => {
-            return Err(refuse("text supplied at runtime"));
-        }
+/// Keep initializers within the existing literal/arithmetic subset.
+fn unsupported(kind: &ParsedExprKind) -> Option<&'static str> {
+    Some(match kind {
+        ParsedExprKind::Val(..)
+        | ParsedExprKind::Var(..)
+        | ParsedExprKind::ModuleItem(..)
+        | ParsedExprKind::BinOp(..)
+        | ParsedExprKind::Not(..)
+        | ParsedExprKind::Neg(..)
+        | ParsedExprKind::Cast(..)
+        | ParsedExprKind::List(..)
+        | ParsedExprKind::Tuple(..)
+        | ParsedExprKind::Map(..)
+        | ParsedExprKind::Struct(..)
+        | ParsedExprKind::ObjectLiteral(..) => return None,
+        ParsedExprKind::SIndex(..) => "a stream offset",
+        ParsedExprKind::Apply(..) | ParsedExprKind::Partial(..) => "a call",
+        ParsedExprKind::Lambda(..) | ParsedExprKind::Fix(..) => "a function",
+        ParsedExprKind::Dynamic(..) | ParsedExprKind::Defer(..) => "text supplied at runtime",
         ParsedExprKind::Update(..)
         | ParsedExprKind::Latch(..)
         | ParsedExprKind::Init(..)
         | ParsedExprKind::When(..)
         | ParsedExprKind::IsDefined(..)
-        | ParsedExprKind::Default(..) => return Err(refuse("a stream operation")),
-        ParsedExprKind::Match(..) | ParsedExprKind::Matches(..) => {
-            return Err(refuse("a match"));
-        }
-        ParsedExprKind::Constructor(..) => return Err(refuse("a constructor")),
-        _ => return Err(refuse("this expression")),
+        | ParsedExprKind::Default(..) => "a stream operation",
+        ParsedExprKind::Match(..) | ParsedExprKind::Matches(..) => "a match",
+        ParsedExprKind::Constructor(..) => "a constructor",
+        _ => "this expression",
     })
 }
 
-/// One folded operation, with a failure reported where it was written.
-fn evaluated(
-    result: Result<crate::core::Value, crate::core::values::operations::ValueOpError>,
-    span: Span,
-) -> Result<SyntaxLiteral, DsrvExpandError> {
-    let value = result.map_err(|error| DsrvExpandError::ConstantValue {
-        message: error.to_string(),
-        span,
-    })?;
-    SyntaxLiteral::try_from(value).map_err(|error| DsrvExpandError::ConstantValue {
-        message: error.to_string(),
-        span,
+/// The literal a checked body yields, retaining its expected container shape.
+fn literal_of(value: Value, expected: Option<&StreamType>) -> Result<SyntaxLiteral, String> {
+    Ok(match value {
+        Value::List(values) => {
+            let element = match expected {
+                Some(StreamType::List(element)) => Some(element.as_ref()),
+                _ => None,
+            };
+            SyntaxLiteral::List(
+                values
+                    .into_iter()
+                    .map(|value| literal_of(value, element))
+                    .collect::<Result<_, _>>()?,
+            )
+        }
+        Value::Tuple(values) => {
+            let types = match expected {
+                Some(StreamType::Tuple(types)) => Some(types),
+                _ => None,
+            };
+            SyntaxLiteral::Tuple(
+                values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, value)| literal_of(value, types.and_then(|types| types.get(i))))
+                    .collect::<Result<_, _>>()?,
+            )
+        }
+        Value::Map(values) => {
+            let fields = values
+                .into_iter()
+                .map(|(key, value)| {
+                    let typ = match expected {
+                        Some(StreamType::Map(element)) => Some(element.as_ref()),
+                        Some(StreamType::Struct(fields, _)) => fields
+                            .iter()
+                            .find(|(name, _)| name == &key)
+                            .map(|(_, typ)| typ),
+                        _ => None,
+                    };
+                    Ok((key, literal_of(value, typ)?))
+                })
+                .collect::<Result<_, String>>()?;
+            if matches!(expected, Some(StreamType::Struct(..))) {
+                SyntaxLiteral::Struct(fields)
+            } else {
+                SyntaxLiteral::Map(fields)
+            }
+        }
+        other => SyntaxLiteral::try_from(other).map_err(|error| error.to_string())?,
     })
+}
+
+/// What a constant's body may name.
+struct ConstScope {
+    own: ModulePath,
+    bare: BTreeMap<VarName, TypedConstant>,
+    qualified: BTreeMap<(Vec<ModuleName>, VarName), TypedConstant>,
+    /// The names this module declared itself, which have been folded.
+    local: BTreeSet<VarName>,
+}
+
+/// What a name stands for where it names a constant, as inlining writes
+/// one in.
+pub(crate) trait ConstantNames {
+    /// The constant a bare name stands for.
+    fn bare(&self, name: &VarName) -> Option<&TypedConstant>;
+    /// The constant `name` stands for in `module`.
+    fn through_module(&self, module: &[ModuleName], name: &VarName) -> Option<&TypedConstant>;
+    /// Whether no name stands for a constant.
+    fn is_empty(&self) -> bool;
+}
+
+impl ConstantNames for ConstScope {
+    fn bare(&self, name: &VarName) -> Option<&TypedConstant> {
+        self.bare.get(name)
+    }
+
+    fn through_module(&self, module: &[ModuleName], name: &VarName) -> Option<&TypedConstant> {
+        if module == self.own.as_slice() {
+            return self
+                .local
+                .contains(name)
+                .then(|| self.bare.get(name))
+                .flatten();
+        }
+        self.qualified.get(&(module.to_vec(), name.clone()))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.bare.is_empty() && self.qualified.is_empty()
+    }
 }
 
 /// The constants one module may name, in a form that can be stored.
@@ -385,47 +494,6 @@ impl Constants {
         self.table.is_empty()
     }
 
-    /// What a name in this module stands for, bare or through a module.
-    pub(crate) fn bare(&self, name: &VarName) -> Option<&SyntaxLiteral> {
-        self.table
-            .declared(&self.own)
-            .into_iter()
-            .find(|(declared, _)| *declared == name)
-            .map(|(_, entry)| &entry.value)
-            .or_else(|| {
-                self.imported
-                    .iter()
-                    .filter(|(_, bare)| **bare)
-                    .find_map(|(module, _)| {
-                        self.table
-                            .exported(module)
-                            .into_iter()
-                            .find(|(exported, _)| *exported == name)
-                            .map(|(_, entry)| &entry.value)
-                    })
-            })
-    }
-
-    pub(crate) fn through_module(
-        &self,
-        module: &[ModuleName],
-        name: &VarName,
-    ) -> Option<&SyntaxLiteral> {
-        let reachable = module == self.own.as_slice() || self.imported.contains_key(module);
-        if !reachable {
-            return None;
-        }
-        let entries = if module == self.own.as_slice() {
-            self.table.declared(module)
-        } else {
-            self.table.exported(module)
-        };
-        entries
-            .into_iter()
-            .find(|(declared, _)| *declared == name)
-            .map(|(_, entry)| &entry.value)
-    }
-
     /// What this module may name, written into a node's identity.
     pub(crate) fn describe(&self, out: &mut String) {
         use std::fmt::Write as _;
@@ -449,8 +517,51 @@ impl Constants {
     }
 }
 
-/// Two `Constants` values are equal when they share a table and module and
-/// have the same imports.
+impl ConstantNames for Constants {
+    /// What a name in this module stands for, bare or through a module.
+    fn bare(&self, name: &VarName) -> Option<&TypedConstant> {
+        self.table
+            .declared(&self.own)
+            .into_iter()
+            .find(|(declared, _)| *declared == name)
+            .map(|(_, entry)| &entry.value)
+            .or_else(|| {
+                self.imported
+                    .iter()
+                    .filter(|(_, bare)| **bare)
+                    .find_map(|(module, _)| {
+                        self.table
+                            .exported(module)
+                            .into_iter()
+                            .find(|(exported, _)| *exported == name)
+                            .map(|(_, entry)| &entry.value)
+                    })
+            })
+    }
+
+    fn through_module(&self, module: &[ModuleName], name: &VarName) -> Option<&TypedConstant> {
+        let reachable = module == self.own.as_slice() || self.imported.contains_key(module);
+        if !reachable {
+            return None;
+        }
+        let entries = if module == self.own.as_slice() {
+            self.table.declared(&self.own)
+        } else {
+            self.table.exported(module)
+        };
+        entries
+            .into_iter()
+            .find(|(declared, _)| *declared == name)
+            .map(|(_, entry)| &entry.value)
+    }
+
+    fn is_empty(&self) -> bool {
+        Constants::is_empty(self)
+    }
+}
+
+/// Two are the same where they offer the same constants, which sharing a
+/// table and standing in the same module is what says.
 impl PartialEq for Constants {
     fn eq(&self, other: &Self) -> bool {
         if self.is_empty() && other.is_empty() {

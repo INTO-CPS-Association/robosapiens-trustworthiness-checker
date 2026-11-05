@@ -41,6 +41,8 @@ contiguous_tree::tree_schema! {
         // Frontend-generated type ascription; unlike a source cast, this does
         // not originate in the user's DSRV source.
         Ascribe(value: child, target: data(SourceType)),
+        // A normalized constant carries its already validated declared type.
+        Constant(value: child, target: data(SourceType)),
         Var(variable: data(VarName)),
         // A value named through a module. Expansion inlines the def it
         // names, so this never reaches the core AST.

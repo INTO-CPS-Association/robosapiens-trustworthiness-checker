@@ -156,14 +156,11 @@ pub enum DsrvExpandError {
     #[error("a constant could not be worked out: {message}")]
     ConstantValue { message: String, span: Span },
 
-    #[error(
-        "constant `{name}` in {location} does not have its declared type {expected} at {span:?}: {message}"
-    )]
-    ConstantType {
+    #[error("constant `{name}` in {location} does not type-check at {span:?}: {errors:?}")]
+    ConstantCheck {
         name: String,
         location: String,
-        expected: crate::core::StreamType,
-        message: String,
+        errors: crate::lang::dsrv::diagnostics::SemanticErrors,
         span: Span,
     },
 
@@ -322,7 +319,11 @@ pub(crate) fn expand_declarations_in(
         Some(callable) if !callable.is_empty() => Some(callable),
         Some(_) => None,
         None if declares_a_def_or_constant(parsed.declarations()) => {
-            let constants = Rc::new(constants::single_file_constants(&parsed, &context)?);
+            let constants = Rc::new(constants::single_file_constants(
+                &parsed,
+                &context,
+                Some(archive),
+            )?);
             let table = functions::single_file_table(
                 &parsed,
                 parsed.source().map(|_| archive.token()),
@@ -594,6 +595,8 @@ fn check_expression_types(
                 ascription.source_type().into_iter().collect()
             }
             ParsedExprKind::Cast(_, target) | ParsedExprKind::Ascribe(_, target) => vec![target],
+            // The constant type was validated in its declaring module.
+            ParsedExprKind::Constant(..) => continue,
             _ => continue,
         };
         for ty in types {
@@ -859,7 +862,7 @@ pub(crate) fn expand_tree(
                 Cast(value, target) => {
                     ExprKind::Cast(*node.child(*value), context.resolve_type(target)?)
                 }
-                Ascribe(value, target) => {
+                Ascribe(value, target) | Constant(value, target) => {
                     ExprKind::Ascribe(*node.child(*value), context.resolve_type(target)?)
                 }
                 Trunc(value) => ExprKind::Trunc(*node.child(*value)),

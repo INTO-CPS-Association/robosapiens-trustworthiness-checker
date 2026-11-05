@@ -179,7 +179,7 @@ pub(crate) fn inline_functions(
         && imported.qualified.is_empty()
         && imported
             .constants
-            .is_none_or(super::constants::Constants::is_empty);
+            .is_none_or(|constants| constants.is_empty());
     if names_nothing {
         return Ok(parsed);
     }
@@ -295,7 +295,7 @@ pub(crate) struct Scope<'a> {
     /// What a bare or qualified name stands for, where it names a constant
     /// rather than a stream. A constant is a value, not a tree, so it is
     /// written in as a literal rather than grafted.
-    pub(crate) constants: Option<&'a super::constants::Constants>,
+    pub(crate) constants: Option<&'a dyn super::constants::ConstantNames>,
     pub(crate) bare: BTreeMap<VarName, Def<'a>>,
     pub(crate) qualified: BTreeMap<(Vec<ModuleName>, VarName), Def<'a>>,
 }
@@ -371,24 +371,28 @@ fn graft(
             def, None, named, cursor, &arguments, scope, builder, active, bound, stamp,
         );
     }
-    // A constant is a value, so it replaces the name with a literal leaf.
-    // Allocating a leaf keeps the trailing-roots discipline trivially.
+    // A constant is a value, not a fresh literal: retain its declared type
+    // in an internal ascription at the name's source location.
     if let Some(constants) = scope.constants {
         if let ParsedExprKind::Var(name) = cursor.kind()
             && !bound.contains(name)
             && let Some(value) = constants.bare(name)
         {
+            let origin = Stamp::place(stamp, cursor);
+            let literal = builder.alloc(ParsedExprKind::Val(value.literal.clone()), origin.clone());
             return Ok(builder.alloc(
-                ParsedExprKind::Val(value.clone()),
-                Stamp::place(stamp, cursor),
+                ParsedExprKind::Constant(literal, value.typ.as_ref().clone().into()),
+                origin,
             ));
         }
         if let ParsedExprKind::ModuleItem(path) = cursor.kind()
             && let Some(value) = constants.through_module(path.module(), path.name())
         {
+            let origin = Stamp::place(stamp, cursor);
+            let literal = builder.alloc(ParsedExprKind::Val(value.literal.clone()), origin.clone());
             return Ok(builder.alloc(
-                ParsedExprKind::Val(value.clone()),
-                Stamp::place(stamp, cursor),
+                ParsedExprKind::Constant(literal, value.typ.as_ref().clone().into()),
+                origin,
             ));
         }
         if let ParsedExprKind::SIndex(variable, offset) = cursor.kind() {
@@ -411,7 +415,7 @@ fn graft(
                     constants.through_module(path.module(), path.name())
                 };
                 if let Some(value) = found {
-                    let offset = offset_of(value, path, span)?;
+                    let offset = offset_of(&value.literal, path, span)?;
                     return Ok(builder.alloc(
                         ParsedExprKind::SIndex(
                             variable.clone(),
