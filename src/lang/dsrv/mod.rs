@@ -20,25 +20,9 @@ mod syntax;
 pub mod type_checker;
 
 #[cfg(test)]
-mod cast_tests;
-#[cfg(test)]
-mod constant_tests;
-#[cfg(test)]
-mod generic_tests;
-#[cfg(test)]
-mod lexical_tests;
-#[cfg(test)]
-mod match_tests;
-#[cfg(test)]
-mod module_tests;
-#[cfg(test)]
-mod std_option_tests;
-#[cfg(test)]
-mod tagged_union_tests;
-#[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
-mod warning_tests;
+mod tests;
 
 pub use elaborate::ElaboratedDsrvSpecification;
 pub use expand::language::{
