@@ -2499,9 +2499,12 @@ fn lifecycle_dynamic_program() -> DataflowProgram {
 #[test]
 fn lifecycle_compile_once_clones_payload_but_not_session_state() {
     DataflowProgram::reset_root_compile_counts();
-    crate::lang::dsrv::reset_test_pipeline_counts();
+    crate::lang::dsrv::test_support::reset_entry_point_counts();
     let specification = elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x");
-    assert_eq!(crate::lang::dsrv::test_pipeline_counts(), (1, 1));
+    assert_eq!(
+        crate::lang::dsrv::test_support::entry_point_counts(),
+        (1, 1)
+    );
     let program = DataflowProgram::compile_with_semantics(specification, Semantics::Untimed);
     let program = program.expect("counter specification should compile");
     assert_eq!(DataflowProgram::root_compile_counts(), (0, 1));
@@ -2534,9 +2537,9 @@ fn lifecycle_compile_once_clones_payload_but_not_session_state() {
     assert_eq!(first_rows, second_rows);
     assert_eq!(DataflowProgram::root_compile_counts(), (0, 1));
     assert_eq!(
-        crate::lang::dsrv::test_pipeline_counts(),
+        crate::lang::dsrv::test_support::entry_point_counts(),
         (1, 1),
-        "cloning and monitor construction must not parse or type-check the root again"
+        "cloning and monitor construction must not reenter FromStr or specification checking"
     );
 
     DataflowProgram::reset_root_compile_counts();

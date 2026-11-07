@@ -61,7 +61,7 @@ impl DsrvSpecification {
     /// Validate and type-check, reporting inferred types and warnings.
     pub fn check(self) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
         #[cfg(test)]
-        tests::record_check();
+        super::test_support::record_check_entry();
         match self.validate() {
             Ok(validated) => type_checker::type_check(validated),
             Err(errors) => SemanticAnalysisReport::new(Err(errors), Vec::new()),
@@ -73,7 +73,7 @@ impl ValidatedDsrvSpecification {
     /// Type-check a validated specification and report warnings.
     pub fn check(self) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
         #[cfg(test)]
-        tests::record_check();
+        super::test_support::record_check_entry();
         type_checker::type_check(self)
     }
 }
@@ -92,7 +92,7 @@ impl FromStr for DsrvSpecification {
 
     fn from_str(source: &str) -> Result<Self, Self::Err> {
         #[cfg(test)]
-        tests::record_parse();
+        super::test_support::record_parse_entry();
         parser::parse_str(source)
     }
 }
@@ -132,8 +132,3 @@ pub(super) fn parse_and_expand_expression(
         &parsed, &context, &callable, located,
     )?)
 }
-
-#[cfg(test)]
-pub(crate) use tests::{reset_test_pipeline_counts, test_pipeline_counts};
-#[cfg(test)]
-mod tests;

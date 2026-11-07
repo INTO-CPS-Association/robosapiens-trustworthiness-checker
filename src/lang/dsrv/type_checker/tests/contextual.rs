@@ -643,3 +643,55 @@ fn nested_runtime_markers_do_not_manufacture_a_source_type() {
         &StreamType::Tuple([StreamType::Int, StreamType::Bool].into_iter().collect())
     );
 }
+
+#[test]
+fn lambda_parameter_types_are_inferred_from_their_context() {
+    let require_checked = |source: &str| {
+        type_check(source.parse().unwrap()).unwrap_or_else(|errors| panic!("{source}: {errors:?}"))
+    };
+    for (source, output, expected) in [
+        (
+            "in xs: List<Int>\nout ys: List<Int> = List.map(\\x -> x + 1, xs)",
+            "ys",
+            StreamType::List(Box::new(StreamType::Int)),
+        ),
+        (
+            "in xs: List<Int>\nout ys: List<Int> = List.filter(\\x -> x > 0, xs)",
+            "ys",
+            StreamType::List(Box::new(StreamType::Int)),
+        ),
+        (
+            "in xs: List<Int>\nout s: Int = List.fold(\\acc, x -> acc + x, 0, xs)",
+            "s",
+            StreamType::Int,
+        ),
+        (
+            "in x: Int\nout y: Int = (\\n -> n * 2)(x)",
+            "y",
+            StreamType::Int,
+        ),
+        (
+            "in x: Float\nout y: Float = (\\n, m -> n + m)(x, 1.5)",
+            "y",
+            StreamType::Float,
+        ),
+    ] {
+        let checked = require_checked(source);
+        assert_eq!(
+            checked.var_expr_ref(&VarName::new(output)).unwrap().typ(),
+            &expected,
+            "{source}"
+        );
+    }
+
+    // Annotations still win, and must agree with the context.
+    require_checked("in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Int -> x + 1, xs)");
+    assert!(
+        type_check(
+            "in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Str -> 1, xs)"
+                .parse()
+                .unwrap()
+        )
+        .is_err()
+    );
+}

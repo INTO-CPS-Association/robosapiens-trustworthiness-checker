@@ -869,6 +869,33 @@ mod tests {
         DsrvParseError, check_core_source, parse_expr_with_context, parse_str, parse_str_with,
     };
 
+    #[test]
+    fn nested_distribution_primitives_need_the_distributed_dialect() {
+        use crate::lang::dsrv::{DsrvParseError, LanguageError};
+        for body in [
+            "out z\nz = Tuple(dist(node1, node2))",
+            "out z\nz = if true then dist(node1, node2) else dist(node1, node2)",
+            "out z\nz = (\\x: Int -> dist(node1, node2))",
+            "out z\nz = dynamic(dist(node1, node2), {})",
+        ] {
+            assert!(
+                matches!(
+                    body.parse::<DsrvSpecification>(),
+                    Err(DsrvParseError::Language(
+                        LanguageError::NeedsDistributed { .. }
+                    ))
+                ),
+                "{body}"
+            );
+            let specification = format!("language distributed\n{body}")
+                .parse::<DsrvSpecification>()
+                .unwrap_or_else(|error| panic!("{body}: {error}"));
+            specification
+                .validate()
+                .unwrap_or_else(|errors| panic!("{body}: {errors:?}"));
+        }
+    }
+
     fn language_of(source: &str) -> LanguageConfig {
         parse_str(source)
             .unwrap()

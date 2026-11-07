@@ -723,6 +723,67 @@ mod tests {
     use test_log::test;
 
     #[test]
+    fn inferred_lambda_parameters_print_without_annotations() {
+        let source = "in xs: List<Int>\nout ys: List<Int>\nys = List.map(\\x -> x + 1, xs)\n";
+        let spec = source.parse::<DsrvSpecification>().unwrap();
+        let printed = spec.to_string();
+        assert!(printed.contains("\\x -> "), "{printed}");
+        assert_eq!(printed.parse::<DsrvSpecification>().unwrap(), spec);
+    }
+
+    #[test]
+    fn interleaved_entries_drive_order_and_display() {
+        let source = "in z: Int\n\
+                      out b: Int\n\
+                      b = a + z\n\
+                      in q: Int\n\
+                      aux a: Int\n\
+                      a = q + 1\n\
+                      out c: Int\n\
+                      c = z - q";
+        let specification = source.parse::<DsrvSpecification>().unwrap();
+        assert_eq!(
+            specification.input_vars_in_order(),
+            vec![VarName::new("z"), VarName::new("q")]
+        );
+        assert!(matches!(
+            specification.declarations()[1],
+            Declaration::Output {
+                ref name,
+                annotation: Some(crate::core::StreamType::Int),
+                ..
+            }
+                if name == &VarName::new("b")
+        ));
+        assert_eq!(
+            specification.to_string(),
+            "in z: Int\n\
+             out b: Int\n\
+             b = (a + z)\n\
+             in q: Int\n\
+             aux a: Int\n\
+             a = (q + 1)\n\
+             out c: Int\n\
+             c = (z - q)\n"
+        );
+        assert_eq!(
+            specification.stream_vars_in_order(),
+            [VarName::new("b"), VarName::new("a"), VarName::new("c")]
+        );
+        assert_eq!(
+            specification
+                .declarations()
+                .iter()
+                .filter_map(|entry| {
+                    matches!(entry, Declaration::Equation { .. })
+                        .then(|| entry.stream().expect("a stream declaration").clone())
+                })
+                .collect::<Vec<_>>(),
+            [VarName::new("b"), VarName::new("a"), VarName::new("c")]
+        );
+    }
+
+    #[test]
     fn unary_minus_is_syntax_faithful_and_preserves_spans() {
         let source = "-42";
         let expression = parse_expr(source).expect("unary minus should parse");

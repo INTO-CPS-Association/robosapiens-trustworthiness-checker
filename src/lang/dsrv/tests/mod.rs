@@ -8,6 +8,7 @@ mod generics;
 mod lexical;
 mod matches;
 mod modules;
+mod pipeline;
 mod std_option;
 mod tagged_unions;
 mod validation;

@@ -1018,3 +1018,35 @@ fn an_anonymous_call_passes_its_expected_union_type_to_its_body() {
         StreamType::Union(_)
     ));
 }
+
+#[test]
+fn struct_equality_needs_operands_of_the_same_struct_type() {
+    type_check(
+        "in a: Struct<x: Int>\nin b: Struct<x: Int>\nout same: Bool = a == b"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    type_check(
+        "in n: Int\nout same: Bool = {x: n, y: 2} != {y: 2, x: 1}"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    for source in [
+        "in n: Int\nout same: Bool = {x: 1} == {x: \"a\"}",
+        "in n: Int\nout same: Bool = {x: 1} == {x: 1, y: 2}",
+        "in n: Int\nout same: Bool = {x: 1} == n",
+    ] {
+        let Err(errors) = type_check(source.parse().unwrap()) else {
+            panic!("{source} must not type check");
+        };
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, SemanticError::TypeError(error)
+                    if error.kind() == &TypeErrorKind::OperatorTypeMismatch)),
+            "{source}: {errors:?}"
+        );
+    }
+}

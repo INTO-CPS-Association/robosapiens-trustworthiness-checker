@@ -30,5 +30,3 @@ pub use expand::language::{
     CoreDsrvSpecification, Dialect, Feature, IfPolicy, LanguageConfig, LanguageError, MetaFeature,
 };
 pub use parser::{DsrvParseError, check_core_source};
-#[cfg(test)]
-pub(crate) use pipeline::{reset_test_pipeline_counts, test_pipeline_counts};

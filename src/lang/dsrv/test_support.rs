@@ -3,6 +3,7 @@
     reason = "reusable strategies precede their test implementations"
 )]
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
@@ -15,6 +16,34 @@ use crate::{
     core::{BinaryOperator, StreamType},
     lang::dsrv::ast::Expr,
 };
+
+// Per-thread counts of FromStr and specification check entry points only.
+// Direct parser calls and work performed inside those entry points are not counted.
+thread_local! {
+    static ENTRY_POINT_COUNTS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
+pub(crate) fn reset_entry_point_counts() {
+    ENTRY_POINT_COUNTS.with(|counts| counts.set((0, 0)));
+}
+
+pub(crate) fn entry_point_counts() -> (usize, usize) {
+    ENTRY_POINT_COUNTS.with(Cell::get)
+}
+
+pub(crate) fn record_parse_entry() {
+    ENTRY_POINT_COUNTS.with(|counts| {
+        let (parse, check) = counts.get();
+        counts.set((parse + 1, check));
+    });
+}
+
+pub(crate) fn record_check_entry() {
+    ENTRY_POINT_COUNTS.with(|counts| {
+        let (parse, check) = counts.get();
+        counts.set((parse, check + 1));
+    });
+}
 
 /// Check concrete types, for tests that expect no warning.
 #[track_caller]

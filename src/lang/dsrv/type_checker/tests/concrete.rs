@@ -512,3 +512,18 @@ fn reversed_declaration_chains_infer_each_root_after_its_dependencies() {
         }
     }
 }
+
+#[test]
+fn a_lambda_parameter_without_context_requests_an_annotation() {
+    // A lambda stored in a list is checked with nothing to infer from.
+    let source = "in x: Int\nout y: Int = List.len(List(\\f -> 1))";
+
+    let errors = type_check(source.parse().unwrap()).expect_err("lambda input needs an annotation");
+    assert!(
+        errors.iter().any(|error| matches!(error,
+            SemanticError::UnresolvedType(error)
+                if error.message().contains("lambda parameter f needs a type annotation")
+        )),
+        "{errors:?}"
+    );
+}

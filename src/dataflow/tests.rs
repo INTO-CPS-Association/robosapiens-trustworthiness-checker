@@ -1290,14 +1290,14 @@ fn dataflow_compiles_elaborated_models_and_checking_refuses_invalid_ones() {
 }
 
 #[test]
-fn proof_consuming_compilers_skip_repeated_admission_and_typechecking() {
+fn compilers_do_not_reenter_frontend_entry_points() {
     let source = "in x: Int\nout y: Int\ny = x + 1";
-    crate::lang::dsrv::reset_test_pipeline_counts();
+    crate::lang::dsrv::test_support::reset_entry_point_counts();
     let specification = elaborated(source);
     assert_eq!(
-        crate::lang::dsrv::test_pipeline_counts(),
+        crate::lang::dsrv::test_support::entry_point_counts(),
         (1, 1),
-        "elaboration parses and checks once"
+        "elaboration enters FromStr and specification checking once"
     );
 
     for (semantics, expected) in [
@@ -1313,9 +1313,9 @@ fn proof_consuming_compilers_skip_repeated_admission_and_typechecking() {
             "an elaborated specification should reach lowering exactly once"
         );
         assert_eq!(
-            crate::lang::dsrv::test_pipeline_counts(),
+            crate::lang::dsrv::test_support::entry_point_counts(),
             (1, 1),
-            "consuming an elaborated specification must not check it again"
+            "compilation must not reenter FromStr or specification checking"
         );
     }
 }
