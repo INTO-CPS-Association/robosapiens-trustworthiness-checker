@@ -20,23 +20,23 @@ mod typing_support;
 
 use self::{checking::check, diagnostics::WarningCollector, type_contexts::TypeContext};
 use super::{
-    ast::{AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr},
+    ast::{AstShared, CheckedDsrvSpecification, CheckedExpr, Expr, ValidatedDsrvSpecification},
     diagnostics::{SemanticAnalysisReport, SemanticResult},
     source_map::SourceArchive,
-    validation::validate_specification,
 };
 use crate::core::StreamType;
 use contiguous_tree::TreeCursorExt;
 pub use runtime_checks::check_value_stream_type;
 pub use types::*;
 
+/// Infer and check types after the pipeline has validated the specification.
 pub(crate) fn type_check(
-    mut spec: DsrvSpecification,
+    spec: ValidatedDsrvSpecification,
 ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
+    let mut spec = spec.into_specification();
     let mut warnings = WarningCollector::default();
     let sources = AstShared::clone(spec.sources());
     let result = (|| {
-        validate_specification(&spec)?;
         let mut environment = spec.type_annotations().clone();
         let types = specification::check_streams(&spec, &mut environment, &mut warnings)?;
         spec.type_annotations = environment;

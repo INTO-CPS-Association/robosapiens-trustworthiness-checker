@@ -19,8 +19,6 @@ use super::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, CheckedExprRef, DsrvSpecification,
     ExprBuilder, ExprForestMap, ExprId, ExprKind, ExprRewriteNode, ExprView, SyntaxLiteral,
 };
-use super::diagnostics::SemanticAnalysisReport;
-use super::parser::DsrvParseError;
 use crate::core::{
     RuntimeCapabilities, RuntimeCapabilityRequirement, Specification, StreamType, VarName,
 };
@@ -37,13 +35,6 @@ pub struct ElaboratedDsrvSpecification {
 }
 
 impl ElaboratedDsrvSpecification {
-    /// Parse, check and elaborate a specification. A parse failure stops
-    /// before checking; otherwise the check is reported.
-    pub fn parse(source: &str) -> Result<SemanticAnalysisReport<Self>, DsrvParseError> {
-        CheckedDsrvSpecification::parse(source)
-            .map(|report| report.map_checked(CheckedDsrvSpecification::elaborate))
-    }
-
     /// The checked specification as written, before elaboration.
     pub fn source(&self) -> &CheckedDsrvSpecification {
         &self.source
@@ -91,23 +82,12 @@ impl ElaboratedDsrvSpecification {
     }
 }
 
-impl CheckedDsrvSpecification {
-    /// Elaborate this checked specification into the tree runtimes run.
-    pub fn elaborate(self) -> ElaboratedDsrvSpecification {
-        let elaborated = elaborate_tree(&self).prepare_sites();
-        ElaboratedDsrvSpecification {
-            source: self,
-            elaborated,
-        }
-    }
-}
-
-impl DsrvSpecification {
-    /// Check this specification, then elaborate it.
-    pub fn check_and_elaborate(self) -> SemanticAnalysisReport<ElaboratedDsrvSpecification> {
-        self.check()
-            .map_checked(CheckedDsrvSpecification::elaborate)
-    }
+/// Rewrite a checked specification and prepare the sites of its execution tree.
+pub(super) fn elaborate_specification(
+    source: CheckedDsrvSpecification,
+) -> ElaboratedDsrvSpecification {
+    let elaborated = elaborate_tree(&source).prepare_sites();
+    ElaboratedDsrvSpecification { source, elaborated }
 }
 
 impl CheckedExpr {

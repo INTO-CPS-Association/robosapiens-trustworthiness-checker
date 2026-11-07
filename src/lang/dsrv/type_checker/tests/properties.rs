@@ -431,6 +431,6 @@ proptest! {
 
     #[test]
     fn concrete_typechecking_is_total(spec in arb_dsrv_spec()) {
-        let _=super::super::type_check(spec).into_parts();
+        let _=spec.check().into_parts();
     }
 }

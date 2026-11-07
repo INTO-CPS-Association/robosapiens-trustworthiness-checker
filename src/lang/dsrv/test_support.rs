@@ -19,7 +19,7 @@ use crate::{
 /// Check concrete types, for tests that expect no warning.
 #[track_caller]
 pub(crate) fn type_check(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
-    crate::lang::dsrv::type_checker::type_check(spec).without_warnings()
+    spec.check().without_warnings()
 }
 
 /// Span-free semantic-entry oracle for ordered-specification properties.

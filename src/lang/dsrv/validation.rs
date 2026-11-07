@@ -1,8 +1,9 @@
 //! Shared structural and lexical validation for DSRV specifications.
 //!
 //! Validation checks declarations, bindings and source scopes without inferring
-//! types. The public validation stage locates its findings; type checking also
-//! invokes these invariants before inference and at standalone expression sites.
+//! types. The public validation stage locates its findings; `pipeline.rs`
+//! runs it before type checking. Standalone expression checking uses the same
+//! invariants.
 
 use std::collections::BTreeSet;
 

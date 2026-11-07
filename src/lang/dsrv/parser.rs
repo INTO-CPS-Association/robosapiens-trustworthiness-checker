@@ -1,33 +1,34 @@
-//! Public parsing entry points.
+//! Source-text entry points and their errors.
 //!
-//! Parsing itself lives in [`super::syntax`] and name resolution in
-//! [`super::expand`]; these functions run both stages for existing callers.
+//! Specification entry points produce an expanded core AST. `pipeline.rs`
+//! composes the stages, including subsequent validation, type checking and
+//! elaboration.
 
-use super::ast::AstShared as Rc;
 use crate::lang::dsrv::catalogue::Catalogue;
-use crate::lang::dsrv::modules::{ImportError, ModuleCollectError, ModuleCollector, imports_of};
+use crate::lang::dsrv::modules::{ImportError, ModuleCollectError, imports_of};
 use crate::lang::dsrv::path::ModuleName;
 
-use anyhow::Error;
-#[cfg(test)]
-use anyhow::anyhow;
-
-#[cfg(test)]
-use super::ast::Declaration;
-use super::ast::{DsrvAstError, Expr, ExprId};
-use super::expand::language::{CoreDsrvSpecification, Dialect, LanguageError};
-use super::expand::{self, DsrvExpandError};
-use super::source::{SourceContext, SourceResolveError};
-use super::source_map::{ProvenanceError, STRING_LABEL, SourceArchive, SourceId, SourceLabel};
-use super::syntax::{self, DsrvSyntaxError};
+use super::{
+    ast::{AstShared as Rc, DsrvAstError, Expr, ExprId},
+    expand::{
+        self, DsrvExpandError,
+        language::{CoreDsrvSpecification, Dialect, LanguageError},
+    },
+    source::{SourceContext, SourceResolveError},
+    source_map::{ProvenanceError, STRING_LABEL, SourceArchive, SourceId, SourceLabel},
+    syntax::{self, DsrvSyntaxError},
+};
 use crate::DsrvSpecification;
+use anyhow::Error;
 
 // The test modules below exercise the whole frontend, so they use the
 // semantic types the stages produce.
 #[cfg(test)]
-use super::span::Span;
+use super::{ast::Declaration, span::Span};
 #[cfg(test)]
 use crate::core::StreamType;
+#[cfg(test)]
+use anyhow::anyhow;
 #[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -128,10 +129,7 @@ pub(crate) fn parse_expr_with_functions(
     callable: Rc<expand::functions::Callable>,
     located: Option<(&SourceArchive, SourceId)>,
 ) -> Result<Expr, DsrvParseError> {
-    let parsed = syntax::parse_expression(input)?;
-    Ok(expand::expand_expression(
-        &parsed, &context, &callable, located,
-    )?)
+    super::pipeline::parse_and_expand_expression(input, context, callable, located)
 }
 
 pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
@@ -151,37 +149,39 @@ pub fn parse_str_with(
     )
 }
 
-/// Parse a program of one file, which diagnostics name `label`.
+/// Parse and expand a single source, using `label` in diagnostics.
 ///
-/// The file may import modules built into the checker, which are the only
-/// ones a program with no filesystem can have; it is then expanded as a
-/// program of those modules and itself, and a `mod` it declares is a
-/// module nothing supplied. A file that imports none expands on its own,
-/// as it always has, with any `mod` it declares ignored.
+/// Catalogue imports activate built-in modules. This entry point never reads
+/// filesystem modules. Local `mod` declarations are ignored unless a catalogue
+/// import or declaration triggers module collection; then an unsupplied local
+/// module is an error. [`collect_modules_from_file`] supplies those sources.
 pub fn parse_labelled(
     input: &str,
     label: SourceLabel,
     requested_dialect: Option<Dialect>,
 ) -> Result<DsrvSpecification, DsrvParseError> {
-    let (parsed, archive) = syntax::parse_archived_specification(input, label.clone())?;
-    if !reaches_an_owned_root(&parsed) {
-        return Ok(expand::expand_specification(
-            parsed,
-            requested_dialect,
-            Rc::new(archive),
-        )?);
-    }
-    let collector = ModuleCollector::with_label(input, label)?;
-    Ok(expand::expand_program(
-        collector.finish()?,
-        requested_dialect,
-    )?)
+    super::pipeline::parse_and_expand_specification(input, label, requested_dialect)
+}
+
+/// Accept a Core DSRV file. A file without a `language` line is read as Core;
+/// one that declares another dialect is rejected.
+pub fn check_core_source(input: &str) -> Result<CoreDsrvSpecification, DsrvParseError> {
+    let request = Some(Dialect::Core);
+    let specification = parse_str_with(input, request)?;
+    Ok(CoreDsrvSpecification::check(specification)?)
+}
+
+/// Run only the syntax stage, so benchmarks can separate it from expansion.
+#[doc(hidden)]
+pub fn parse_syntax_for_benchmark(input: &str) -> Result<(), DsrvParseError> {
+    syntax::parse_specification(input)?;
+    Ok(())
 }
 
 /// Whether a file imports or declares anything under a package root the
 /// catalogue registers. Importing there is what activates an embedded
 /// module, and declaring there is refused, so either needs the collector.
-fn reaches_an_owned_root(parsed: &syntax::ParsedSpecification) -> bool {
+pub(super) fn needs_module_collection(parsed: &syntax::ParsedSpecification) -> bool {
     let owned = |path: &[ModuleName]| Catalogue::STANDARD.owner(path).is_some();
     parsed
         .declarations()
@@ -198,20 +198,6 @@ fn reaches_an_owned_root(parsed: &syntax::ParsedSpecification) -> bool {
 }
 
 pub use super::program::collect_modules_from_file;
-
-/// Accept a Core DSRV file. A file without a `language` line is read as Core;
-/// one that declares another dialect is rejected.
-pub fn check_core_source(input: &str) -> Result<CoreDsrvSpecification, DsrvParseError> {
-    let request = Some(Dialect::Core);
-    let specification = parse_str_with(input, request)?;
-    Ok(CoreDsrvSpecification::check(specification)?)
-}
-
-/// Run only the syntax stage, so benchmarks can separate it from expansion.
-pub fn parse_syntax_for_benchmark(input: &str) -> Result<(), DsrvParseError> {
-    syntax::parse_specification(input)?;
-    Ok(())
-}
 
 #[cfg(test)]
 fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(result: &Result<T, E>) -> String {
