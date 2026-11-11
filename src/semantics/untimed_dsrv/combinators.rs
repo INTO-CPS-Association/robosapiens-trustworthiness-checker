@@ -168,9 +168,10 @@ pub fn if_stm(
     y: LocalStream<Value>,
     z: LocalStream<Value>,
 ) -> LocalStream<Value> {
-    // Uses manual stream lifting rather than a lifting function since deferred values from
-    // excluded branches do not propagate (i.e. we propagate lazily with respect to
-    // deferred values — only the selected branch potentially yields Deferred)
+    // An eager `if` is an ordinary lifted function of its three operands: an absent or
+    // deferred value in any of them propagates, with absence taking precedence, even when it
+    // sits in the branch that is not selected. This keeps `if b then x else y` equivalent to
+    // its Boolean encoding `(b && x) || (!b && y)`.
     Box::pin(
         stream_lift_base(x)
             .zip(stream_lift_base(y))
@@ -178,11 +179,12 @@ pub fn if_stm(
             .map(move |((x, y), z)| {
                 if x == Value::NoVal || y == Value::NoVal || z == Value::NoVal {
                     Value::NoVal
+                } else if x == Value::Deferred || y == Value::Deferred || z == Value::Deferred {
+                    Value::Deferred
                 } else {
                     match x {
                         Value::Bool(true) => y,
                         Value::Bool(false) => z,
-                        Value::Deferred => Value::Deferred,
                         x => panic!("Invalid conditional for if statement with type: {:?}", x),
                     }
                 }

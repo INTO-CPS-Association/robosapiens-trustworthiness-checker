@@ -433,11 +433,14 @@
 //! `NodeState::LazyIf(LazyIfState)` gives each branch its own boxed `EvaluatorState` and retained
 //! output, and also retains the last condition. In ordinary stream evaluation, both branches run on
 //! every tick in which the enclosing stream is evaluated, regardless of the condition. This keeps
-//! their independent temporal state aligned. Each branch output is lifted separately; if either
-//! current-or-retained output is `NoVal`, the whole `if` produces `NoVal`. Otherwise `Bool(true)`
-//! selects the then-value, `Bool(false)` selects the else-value, and a `Deferred` or `NoVal`
-//! condition propagates. A `Deferred` value from the unselected branch does not affect the selected
-//! result. Checked compilation normally prevents any other condition type.
+//! their independent temporal state aligned. An eager `if` is then an ordinary lifted function of
+//! its three operands: the condition, the then-output and the else-output, each current-or-retained.
+//! If any of them is `NoVal` the `if` produces `NoVal`; otherwise, if any is `Deferred` it produces
+//! `Deferred`, even when the `Deferred` value is in the unselected branch. Only when all three are
+//! defined does `Bool(true)` select the then-value and `Bool(false)` the else-value. This keeps
+//! `if b then x else y` equivalent to its Boolean encoding `(b && x) || (!b && y)`, and wrapping a
+//! branch in `default` is how a specification tolerates an absent or deferred branch. Checked
+//! compilation normally prevents any other condition type.
 //!
 //! Branch state is local and recursively owned. Cloning an `Evaluator` clones its branch state, while
 //! normal evaluation mutates the unique live state directly. Context transfer moves matching branch

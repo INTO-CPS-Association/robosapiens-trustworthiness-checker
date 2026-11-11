@@ -214,9 +214,10 @@ pub const EXPERIMENTAL_REVISION: u32 = 4;
 /// experiment itself.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum IfPolicy {
-    /// Both branches advance on every tick the `if` is evaluated, and only
-    /// the condition decides which value is published. The language's
-    /// behaviour without `lazy_if`.
+    /// Both branches advance on every tick the `if` is evaluated, and the
+    /// `if` is a strict lifted function of its condition and both branches:
+    /// an absent or deferred value in any of them propagates, and otherwise
+    /// the condition selects. The language's behaviour without `lazy_if`.
     #[default]
     Eager,
     /// Only the selected branch runs. Each branch has its own timeline,

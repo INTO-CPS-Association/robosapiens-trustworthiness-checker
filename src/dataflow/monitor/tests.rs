@@ -2996,7 +2996,7 @@ fn lifecycle_past_recursive_and_lazy_state_restarts_cold() {
         vec![Value::Int(20), Value::Int(100), Value::Int(20)],
     ];
     let expected_b = vec![
-        vec![Value::Deferred, Value::Int(5), Value::Int(-1)],
+        vec![Value::Deferred, Value::Int(5), Value::Deferred],
         vec![Value::Deferred, Value::Int(11), Value::Int(5)],
         vec![Value::Int(5), Value::Int(18), Value::Int(5)],
     ];

@@ -14,7 +14,7 @@ Ordinary operators lift over `NoVal` and `Deferred` according to their semantics
 
 This difference is part of language semantics, not an optimization. Branch-local delays and calls therefore have timelines determined by the applicable conditional form.
 
-For `if condition then x + 1 else y + 2`, both sums advance even when only one is selected. After retention, an uninitialized `NoVal` branch makes the result `NoVal`; an unselected `Deferred` branch does not make the selected concrete result deferred. Recursive conditionals retain their lazy canonical execution policy. These rules are distinct from strict binary propagation, where `NoVal` takes precedence over `Deferred` after retaining each operand.
+For `if condition then x + 1 else y + 2`, both sums advance even when only one is selected. After retention, the conditional is a strict lifted function of its condition and both branch outputs: any `NoVal` makes the result `NoVal`, and otherwise any `Deferred`, including one in the unselected branch, makes it `Deferred`. This is the same propagation as strict binary operators, where `NoVal` takes precedence over `Deferred` after retaining each operand, and it keeps the conditional equivalent to its Boolean encoding `(c && x) || (!c && y)`. A specification that tolerates an absent or deferred branch wraps that branch in `default`. Recursive conditionals retain their lazy canonical execution policy.
 
 ## Function binding
 

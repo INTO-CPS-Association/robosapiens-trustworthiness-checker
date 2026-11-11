@@ -249,11 +249,19 @@ pub(super) fn if_stream<T: StreamData>(
         lift_base(condition)
             .zip(lift_base(then_stream))
             .zip(lift_base(else_stream))
-            .map(|((condition, then_value), else_value)| match condition {
-                PartialStreamValue::Known(true) => then_value,
-                PartialStreamValue::Known(false) => else_value,
-                PartialStreamValue::NoVal => PartialStreamValue::NoVal,
-                PartialStreamValue::Deferred => PartialStreamValue::Deferred,
+            .map(|((condition, then_value), else_value)| {
+                // An eager `if` is an ordinary lifted function of its three operands.
+                if let Some(marker) = propagated_special([
+                    PartialMarker::of(&condition),
+                    PartialMarker::of(&then_value),
+                    PartialMarker::of(&else_value),
+                ]) {
+                    marker.into_value()
+                } else if let PartialStreamValue::Known(condition) = condition {
+                    if condition { then_value } else { else_value }
+                } else {
+                    unreachable!("a non-special partial stream value must be known")
+                }
             }),
     )
 }

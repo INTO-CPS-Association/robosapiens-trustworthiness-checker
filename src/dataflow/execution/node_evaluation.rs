@@ -652,15 +652,13 @@ fn evaluate_lazy_if_with_history(
     );
     let else_value = retain_last_value(else_value, &mut lazy_if.last_else_value);
 
-    if then_value == Value::NoVal || else_value == Value::NoVal {
-        return Value::NoVal;
+    // An eager `if` is an ordinary lifted function of its three operands.
+    if let Some(special) = propagated_special([&condition, &then_value, &else_value]) {
+        return special;
     }
-
     match condition {
         Value::Bool(true) => then_value,
         Value::Bool(false) => else_value,
-        Value::Deferred => Value::Deferred,
-        Value::NoVal => Value::NoVal,
         other => panic!("if condition must be bool, got {:?}", other),
     }
 }
@@ -837,11 +835,7 @@ fn try_evaluate_lazy_if(
             let unselected =
                 unselected.map(|value| retain_last_value(value, &mut lazy_if.last_else_value));
             let selected = selected?;
-            if selected == Value::NoVal || matches!(unselected, Ok(Value::NoVal)) {
-                Ok(Value::NoVal)
-            } else {
-                Ok(selected)
-            }
+            Ok(strict_selection(selected, &unselected))
         }
         Value::Bool(false) => {
             let unselected = try_evaluate_branch(
@@ -860,11 +854,7 @@ fn try_evaluate_lazy_if(
                 unselected.map(|value| retain_last_value(value, &mut lazy_if.last_then_value));
             let selected =
                 selected.map(|value| retain_last_value(value, &mut lazy_if.last_else_value))?;
-            if selected == Value::NoVal || matches!(unselected, Ok(Value::NoVal)) {
-                Ok(Value::NoVal)
-            } else {
-                Ok(selected)
-            }
+            Ok(strict_selection(selected, &unselected))
         }
         Value::Deferred => {
             let then_value = try_evaluate_branch(
@@ -912,6 +902,14 @@ fn try_evaluate_lazy_if(
         }
         other => panic!("if condition must be bool, got {:?}", other),
     }
+}
+
+/// The value of an eager `if` whose condition is a `Bool`: the selected branch, unless either
+/// branch is absent or deferred, in which case that marker propagates as it does for any other
+/// lifted operator. An unselected branch that failed contributes nothing.
+fn strict_selection(selected: Value, unselected: &Result<Value, DataflowEvaluationError>) -> Value {
+    propagated_special(std::iter::once(&selected).chain(unselected.as_ref().ok()))
+        .unwrap_or(selected)
 }
 
 fn try_evaluate_branch(

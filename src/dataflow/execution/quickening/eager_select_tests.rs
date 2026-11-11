@@ -42,19 +42,94 @@ fn conditional() -> (
 }
 
 #[test]
-fn eager_select_observes_both_branches_but_ignores_unselected_deferred() {
+fn eager_select_propagates_an_unselected_deferred() {
     let (plan, mut state, _evaluators, mut environment) = conditional();
     environment[0] = Value::Bool(true);
     environment[1] = Value::Int(4);
     environment[2] = Value::Deferred;
 
     assert!(plan.execute(&mut state, &mut environment));
-    assert_eq!(environment[3], Value::Int(5));
+    assert_eq!(environment[3], Value::Deferred);
 
+    // The absent else-branch keeps its retained `Deferred`, so it still blocks the selection.
     environment[1] = Value::NoVal;
     environment[2] = Value::NoVal;
     assert!(plan.execute(&mut state, &mut environment));
+    assert_eq!(environment[3], Value::Deferred);
+
+    // Once the else-branch is defined, the selected branch's retained value is the result.
+    environment[2] = Value::Int(7);
+    assert!(plan.execute(&mut state, &mut environment));
     assert_eq!(environment[3], Value::Int(5));
+}
+
+/// Every tier that runs `if c then x + 1 else y + 2` gives the result of the eager `if` as a lifted
+/// function of its condition and both branch outputs, for every combination of absent, deferred
+/// and defined operands. The scalar `+` is strict, so the oracle runs on the shifted branches.
+#[test]
+fn eager_select_is_a_lifted_function_in_every_tier() {
+    let [condition, then_values, else_values] = crate::dataflow::tests::eager_if_operand_trace();
+    let shift = |values: &[Value], by: i64| {
+        values
+            .iter()
+            .map(|value| match value {
+                Value::Int(n) => Value::Int(n + by),
+                other => other.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = crate::dataflow::tests::eager_if_oracle(&[
+        condition.clone(),
+        shift(&then_values, 1),
+        shift(&else_values, 2),
+    ]);
+    let rows = (0..condition.len())
+        .map(|tick| {
+            [
+                condition[tick].clone(),
+                then_values[tick].clone(),
+                else_values[tick].clone(),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    // The quickened region executor on its own.
+    let (plan, mut state, _evaluators, mut environment) = conditional();
+    let quickened_region = rows
+        .iter()
+        .map(|row| {
+            environment[..3].clone_from_slice(row);
+            assert!(plan.execute(&mut state, &mut environment));
+            environment[3].clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(quickened_region, expected, "quickened region");
+
+    let specification = elaborated(
+        "in c: Bool\nin x: Int\nin y: Int\nout result: Int\n\
+         result = if c then x + 1 else y + 2",
+    );
+    let run = |mut monitor: DataflowMonitor| {
+        rows.iter()
+            .map(|row| {
+                let mut output = [Value::NoVal];
+                monitor.evaluate(row, &mut output).unwrap();
+                output[0].clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut canonical = DataflowMonitor::compile_checked(specification.clone()).unwrap();
+    canonical.set_quickening(false);
+    assert_eq!(run(canonical), expected, "canonical monitor");
+    let quickened = DataflowMonitor::compile_checked(specification.clone()).unwrap();
+    assert_eq!(run(quickened), expected, "quickened monitor");
+    #[cfg(feature = "jit")]
+    {
+        let native =
+            DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
+        assert_eq!(native.jit_report().unwrap().plan(), JitPlan::WholeSchedule);
+        assert_eq!(run(native), expected, "native monitor");
+    }
 }
 
 #[test]

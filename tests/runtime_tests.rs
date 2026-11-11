@@ -1429,6 +1429,184 @@ fn test_a_fixed_point_flows_into_its_self_parameter_on_every_runtime() {
     }
 }
 
+/// An eager `if` is strict in both branches, so an else-branch input that never
+/// arrives keeps the result absent even on the ticks that select the defined
+/// then-branch.
+#[test]
+fn test_an_eager_if_whose_unselected_input_never_arrives_is_absent_on_every_runtime() {
+    let spec = "in x: Bool\nin y: Int\nin z: Int\nout w: Int\nw = if x then y else z";
+    let input = BTreeMap::from([
+        (
+            VarName::new("x"),
+            vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
+        ),
+        (
+            VarName::new("y"),
+            vec![Value::Int(42), Value::NoVal, Value::NoVal],
+        ),
+        (VarName::new("z"), vec![Value::NoVal; 3]),
+    ]);
+    for runtime in runtime_backends() {
+        for semantics in [Semantics::TypedUntimed, Semantics::Untimed] {
+            assert_eq!(
+                run_catching_panics(runtime, semantics, spec, &input, "w"),
+                Ok(vec![Value::NoVal; 3]),
+                "{runtime:?} {semantics:?}"
+            );
+        }
+    }
+}
+
+fn assert_runtime_trace_everywhere(
+    spec: &str,
+    inputs: &[(&str, Vec<Value>)],
+    output: &str,
+    expected: &[Value],
+) {
+    let input = inputs
+        .iter()
+        .map(|(name, values)| (VarName::new(name), values.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut failures = Vec::new();
+    for runtime in runtime_backends() {
+        for semantics in [Semantics::TypedUntimed, Semantics::Untimed] {
+            let actual = run_catching_panics(runtime, semantics, spec, &input, output);
+            if actual.as_deref() != Ok(expected) {
+                failures.push(format!("{runtime:?}/{semantics:?}: {actual:?}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{spec}\ninputs: {input:?}\nexpected: {expected:?}\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn test_an_eager_if_waits_for_both_branches_before_selecting_the_current_value() {
+    use Value::{Bool, Int, NoVal};
+
+    for (condition, expression) in [(true, "if c then a else b"), (false, "if c then b else a")] {
+        let spec = format!("in c: Bool\nin a: Int\nin b: Int\nout w: Int = {expression}");
+        assert_runtime_trace_everywhere(
+            &spec,
+            &[
+                ("c", vec![Bool(condition), NoVal, NoVal, NoVal]),
+                ("a", vec![Int(1), Int(2), Int(3), Int(4)]),
+                ("b", vec![NoVal, NoVal, Int(9), NoVal]),
+            ],
+            "w",
+            &[NoVal, NoVal, Int(3), Int(4)],
+        );
+    }
+}
+
+#[test]
+fn test_an_eager_if_retains_each_operand_independently() {
+    use Value::{Bool, Int, NoVal};
+
+    assert_runtime_trace_everywhere(
+        "in c: Bool\nin a: Int\nin b: Int\nout w: Int = if c then a else b",
+        &[
+            (
+                "c",
+                vec![NoVal, NoVal, Bool(true), NoVal, Bool(false), NoVal],
+            ),
+            ("a", vec![Int(10), NoVal, NoVal, Int(11), NoVal, NoVal]),
+            ("b", vec![Int(20), Int(21), NoVal, NoVal, NoVal, Int(22)]),
+        ],
+        "w",
+        &[NoVal, NoVal, Int(10), Int(11), Int(21), Int(22)],
+    );
+}
+
+#[test]
+fn test_an_eager_if_propagates_an_unselected_history_delay() {
+    use Value::{Bool, Deferred, Int, NoVal};
+
+    for (condition, expression) in [
+        (true, "if c then a else delayed"),
+        (false, "if c then delayed else a"),
+    ] {
+        let spec = format!(
+            "in c: Bool\nin a: Int\nin b: Int\n\
+             aux delayed: Int = b[1]\nout w: Int = {expression}"
+        );
+        assert_runtime_trace_everywhere(
+            &spec,
+            &[
+                ("c", vec![Bool(condition), NoVal, Bool(!condition), NoVal]),
+                ("a", vec![Int(10), Int(11), Int(12), NoVal]),
+                ("b", vec![Int(20), Int(21), NoVal, Int(22)]),
+            ],
+            "w",
+            &[Deferred, Int(11), Int(21), Int(21)],
+        );
+    }
+}
+
+#[test]
+fn test_an_eager_if_retains_an_unselected_deferred_until_a_concrete_update() {
+    use Value::{Bool, Deferred, Int, NoVal};
+
+    for (condition, expression) in [(true, "if c then a else b"), (false, "if c then b else a")] {
+        let spec = format!("in c: Bool\nin a: Int\nin b: Int\nout w: Int = {expression}");
+        assert_runtime_trace_everywhere(
+            &spec,
+            &[
+                ("c", vec![Bool(condition), NoVal, NoVal, NoVal, NoVal]),
+                ("a", vec![Int(10), NoVal, Int(11), NoVal, NoVal]),
+                ("b", vec![Int(20), Deferred, NoVal, Int(21), NoVal]),
+            ],
+            "w",
+            &[Int(10), Deferred, Deferred, Int(11), Int(11)],
+        );
+    }
+}
+
+#[test]
+fn test_an_eager_if_gives_missing_values_precedence_over_deferred_in_every_operand() {
+    use Value::{Bool, Deferred, Int, NoVal};
+
+    for (condition, then_value, else_value) in [
+        (Deferred, NoVal, Int(20)),
+        (Deferred, Int(10), NoVal),
+        (NoVal, Deferred, Int(20)),
+        (Bool(true), Deferred, NoVal),
+        (NoVal, Int(10), Deferred),
+        (Bool(false), NoVal, Deferred),
+    ] {
+        assert_runtime_trace_everywhere(
+            "in c: Bool\nin a: Int\nin b: Int\nout w: Int = if c then a else b",
+            &[
+                ("c", vec![condition]),
+                ("a", vec![then_value]),
+                ("b", vec![else_value]),
+            ],
+            "w",
+            &[NoVal],
+        );
+    }
+}
+
+#[test]
+fn test_an_eager_if_uses_marker_consuming_operand_results() {
+    use Value::{Bool, Int, NoVal};
+
+    assert_runtime_trace_everywhere(
+        "in c: Bool\nin a: Int\nin b: Int\naux delayed: Int = a[1]\n\
+         out w: Int = if c then default(delayed, 42) else b",
+        &[
+            ("c", vec![Bool(true), NoVal, Bool(false), Bool(true)]),
+            ("a", vec![NoVal, Int(5), NoVal, Int(7)]),
+            ("b", vec![Int(9), NoVal, Int(8), NoVal]),
+        ],
+        "w",
+        &[Int(42), Int(42), Int(8), Int(5)],
+    );
+}
+
 /// As [`run_one_tick_everywhere`], where a panic is what stopped the run wherever
 /// it happened.
 fn run_one_tick_everywhere_with_panic_text(

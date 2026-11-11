@@ -3465,6 +3465,201 @@ async fn dataflow_semisync_paired_sparse_inputs_across_expression_shapes_parity(
     }
 }
 
+/// Every combination of an absent, deferred or defined condition and branch values, one per tick.
+/// The branch values differ by tick so that the selected one is visible in the result.
+pub(super) fn eager_if_operand_trace() -> [Vec<Value>; 3] {
+    let conditions = [
+        Value::NoVal,
+        Value::Deferred,
+        Value::Bool(true),
+        Value::Bool(false),
+    ];
+    let mut trace: [Vec<Value>; 3] = Default::default();
+    for condition in &conditions {
+        for then_state in 0..3 {
+            for else_state in 0..3 {
+                let tick = trace[0].len() as i64;
+                let operand = |state: u8, base: i64| match state {
+                    0 => Value::NoVal,
+                    1 => Value::Deferred,
+                    _ => Value::Int(base + tick),
+                };
+                trace[0].push(condition.clone());
+                trace[1].push(operand(then_state, 100));
+                trace[2].push(operand(else_state, 200));
+            }
+        }
+    }
+    trace
+}
+
+/// The eager `if` as an ordinary lifted function of its three operands: each operand keeps its
+/// last present value, absence takes precedence over deferral, and otherwise the condition
+/// selects.
+pub(super) fn eager_if_oracle(trace: &[Vec<Value>; 3]) -> Vec<Value> {
+    let mut retained: [Option<Value>; 3] = Default::default();
+    (0..trace[0].len())
+        .map(|tick| {
+            let operands = std::array::from_fn::<Value, 3, _>(|operand| {
+                let current = trace[operand][tick].clone();
+                if current == Value::NoVal {
+                    retained[operand].clone().unwrap_or(Value::NoVal)
+                } else {
+                    retained[operand] = Some(current.clone());
+                    current
+                }
+            });
+            if operands.contains(&Value::NoVal) {
+                Value::NoVal
+            } else if operands.contains(&Value::Deferred) {
+                Value::Deferred
+            } else if operands[0] == Value::Bool(true) {
+                operands[1].clone()
+            } else {
+                operands[2].clone()
+            }
+        })
+        .collect()
+}
+
+#[apply(async_test)]
+async fn eager_if_is_a_lifted_function_in_every_runtime(executor: Rc<LocalExecutor<'static>>) {
+    let [condition, then_values, else_values] = eager_if_operand_trace();
+    let expected = eager_if_oracle(&[condition.clone(), then_values.clone(), else_values.clone()]);
+    let z = VarName::new("z");
+    let inputs = |source: Option<&str>| {
+        let mut inputs = BTreeMap::from([
+            (VarName::new("c"), condition.clone()),
+            (VarName::new("x"), then_values.clone()),
+            (VarName::new("y"), else_values.clone()),
+        ]);
+        if let Some(source) = source {
+            let mut column = vec![Value::NoVal; condition.len()];
+            column[0] = Value::Str(source.into());
+            inputs.insert(VarName::new("source"), column);
+        }
+        inputs
+    };
+
+    let source = "in c: Bool\nin x: Int\nin y: Int\nout z: Int\nz = if c then x else y";
+
+    // The specialised dataflow runtime, the unspecialised one and semi-sync, which ignores types
+    // and so evaluates through the untyped combinators.
+    let rows = assert_runtime_parity(executor.clone(), elaborated(source), inputs(None)).await;
+    assert_eq!(
+        rows.iter().map(|row| row[&z].clone()).collect::<Vec<_>>(),
+        expected,
+        "dataflow and untyped semi-sync"
+    );
+
+    // The asynchronous runtime, through the untyped and the typed combinators.
+    let ticks = condition.len();
+    let untyped = eval_runtime_with::<UntimedDsrvSemantics>(
+        executor.clone(),
+        elaborated(source),
+        inputs(None),
+        ticks,
+    )
+    .await;
+    assert_eq!(stream_trace(&untyped, "z"), expected, "untyped async");
+    let typed = eval_runtime_with::<crate::semantics::CheckedUntimedDsrvSemantics>(
+        executor.clone(),
+        elaborated(source),
+        inputs(None),
+        ticks,
+    )
+    .await;
+    assert_eq!(stream_trace(&typed, "z"), expected, "typed async");
+
+    // The causal semi-sync combinators.
+    let causal = eval_causal_semisync_values(
+        executor.clone(),
+        elaborated(source),
+        inputs(None),
+        &z,
+        ticks,
+    )
+    .await;
+    assert_eq!(causal, expected, "causal semi-sync");
+
+    // Inside a `dynamic` body, which semi-sync evaluates through yet another path.
+    assert_dataflow_semisync_runtime_parity(
+        executor,
+        "in c: Bool\nin x: Int\nin y: Int\nin source: Str\nout z: Int\n\
+         z = dynamic(source: Int)",
+        inputs(Some("if c then x else y")),
+    )
+    .await;
+}
+
+/// The values the causal semi-sync runtime gives `output`, without their explanations.
+async fn eval_causal_semisync_values(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: ElaboratedDsrvSpecification,
+    inputs: BTreeMap<VarName, Vec<Value>>,
+    output: &VarName,
+    limit: usize,
+) -> Vec<Value> {
+    use crate::causal::CausalSet;
+    use crate::semantics::{CausalDsrvSemantics, CausalSemiSyncConfig, annotate_input};
+
+    let input = annotate_input::<CausalSet>(map::input_stream(inputs), spec.input_vars().clone());
+    let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
+    let runtime =
+        SemiSyncRuntimeBuilder::<CausalSemiSyncConfig<CausalSet>, CausalDsrvSemantics>::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input(input.into())
+            .output_writer(output_writer)
+            .build()
+            .await;
+    executor.spawn(runtime.run()).detach();
+    outputs
+        .take(limit)
+        .map(|mut row| row.remove(output).expect("causal output is present").value)
+        .collect()
+        .await
+}
+
+#[apply(async_test)]
+async fn eager_if_agrees_with_its_boolean_encoding_in_every_runtime(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let [condition, then_values, else_values] = eager_if_operand_trace();
+    // Only Bool branches have a Boolean encoding.
+    let as_bool = |values: Vec<Value>| {
+        values
+            .into_iter()
+            .map(|value| match value {
+                Value::Int(n) => Value::Bool(n % 2 == 0),
+                other => other,
+            })
+            .collect::<Vec<_>>()
+    };
+    let inputs = BTreeMap::from([
+        (VarName::new("c"), condition),
+        (VarName::new("a"), as_bool(then_values)),
+        (VarName::new("b"), as_bool(else_values)),
+    ]);
+    let rows = assert_runtime_parity(
+        executor,
+        elaborated(
+            "in c: Bool\nin a: Bool\nin b: Bool\nout via_if: Bool\nout via_bool: Bool\n\
+             via_if = if c then a else b\n\
+             via_bool = (c && a) || (!c && b)",
+        ),
+        inputs,
+    )
+    .await;
+    for (tick, row) in rows.iter().enumerate() {
+        assert_eq!(
+            row[&VarName::new("via_if")],
+            row[&VarName::new("via_bool")],
+            "tick {tick}"
+        );
+    }
+}
+
 #[apply(async_test)]
 async fn dataflow_semisync_dynamic_result_domains_parity(executor: Rc<LocalExecutor<'static>>) {
     let cases = [
@@ -4204,7 +4399,10 @@ async fn dataflow_stateful_lifting_matches_current(executor: Rc<LocalExecutor<'s
 
 #[test]
 fn dataflow_lifting_does_not_depend_on_recursive_plan_shape() {
-    let spec = elaborated("in x: Int\nout z: Int\nz = if false then z[1] else default(x, 42)");
+    // The recursive branch is wrapped in `default`, because an eager `if` propagates the
+    // initial `Deferred` of `z[1]` even when that branch is not selected.
+    let spec =
+        elaborated("in x: Int\nout z: Int\nz = if false then default(z[1], 0) else default(x, 42)");
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
 
     let output = evaluate(

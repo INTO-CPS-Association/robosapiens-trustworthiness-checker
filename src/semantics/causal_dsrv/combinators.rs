@@ -196,21 +196,23 @@ pub fn if_stream<D: CausalDomain>(
             .zip(lift_base(then_stream))
             .zip(lift_base(else_stream))
             .map(|((condition, then_value), else_value)| {
-                // Preserve the ordinary semi-sync semantics: a NoVal in the
+                // Preserve the ordinary semi-sync semantics: a NoVal or Deferred in the
                 // condition or either branch prevents selection, even when
-                // that branch is not chosen.
-                let mut missing = Vec::new();
-                if condition.value == Value::NoVal {
-                    missing.push(condition.explanation.clone().used_as(CausalRole::Selection));
-                }
-                if then_value.value == Value::NoVal {
-                    missing.push(then_value.explanation.clone());
-                }
-                if else_value.value == Value::NoVal {
-                    missing.push(else_value.explanation.clone());
-                }
-                if let Some(explanation) = D::alternative_all(missing) {
-                    return marker(Value::NoVal, explanation);
+                // that branch is not chosen, and NoVal takes precedence.
+                for special in [Value::NoVal, Value::Deferred] {
+                    let mut blocking = Vec::new();
+                    if condition.value == special {
+                        blocking.push(condition.explanation.clone().used_as(CausalRole::Selection));
+                    }
+                    if then_value.value == special {
+                        blocking.push(then_value.explanation.clone());
+                    }
+                    if else_value.value == special {
+                        blocking.push(else_value.explanation.clone());
+                    }
+                    if let Some(explanation) = D::alternative_all(blocking) {
+                        return marker(special, explanation);
+                    }
                 }
                 match condition.value {
                     Value::Bool(true) => marker(
@@ -224,10 +226,6 @@ pub fn if_stream<D: CausalDomain>(
                         else_value
                             .explanation
                             .with_context(condition.explanation, CausalRole::Selection),
-                    ),
-                    Value::Deferred => marker(
-                        Value::Deferred,
-                        condition.explanation.used_as(CausalRole::Selection),
                     ),
                     value => panic!("invalid conditional value {value:?}"),
                 }
