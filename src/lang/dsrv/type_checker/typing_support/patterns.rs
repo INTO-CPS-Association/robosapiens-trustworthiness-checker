@@ -208,6 +208,20 @@ fn show_bindings(bindings: &[(VarName, StreamType)]) -> String {
         .join(", ")
 }
 
+// Which concrete Boolean values a pattern covers: bit 0 is false, bit 1 true.
+fn boolean_coverage(pattern: &MatchPattern) -> u8 {
+    match &pattern.kind {
+        PatternKind::Wildcard | PatternKind::Bind(_) => 0b11,
+        PatternKind::As(_, inner) => boolean_coverage(inner),
+        PatternKind::Literal(SyntaxLiteral::Bool(false)) => 0b01,
+        PatternKind::Literal(SyntaxLiteral::Bool(true)) => 0b10,
+        PatternKind::Or(alternatives) => alternatives.iter().fold(0, |covered, alternative| {
+            covered | boolean_coverage(alternative)
+        }),
+        _ => 0,
+    }
+}
+
 /// Whether the arms leave a value unmatched.
 ///
 /// A guarded arm does not count: its guard may refuse the value it matched,
@@ -221,9 +235,26 @@ pub(in crate::lang::dsrv::type_checker) fn check_exhaustive(
     if unguarded.clone().any(|arm| arm.pattern.is_irrefutable()) {
         return Ok(());
     }
+    if *scrutinee == StreamType::Bool {
+        let covered = unguarded
+            .clone()
+            .fold(0, |covered, arm| covered | boolean_coverage(&arm.pattern));
+        if covered == 0b11 {
+            return Ok(());
+        }
+        let missing = match covered {
+            0b01 => "true",
+            0b10 => "false",
+            _ => "false, true",
+        };
+        return Err(error(
+            expr,
+            TypeErrorKind::MatchNotExhaustive,
+            format!("no arm matches {missing}"),
+        ));
+    }
     let StreamType::Union(schema) = scrutinee else {
-        // Only a union is covered by naming its alternatives; anything else
-        // needs a pattern that matches whatever it is given.
+        // Other types need a pattern that matches whatever they are given.
         return Err(error(
             expr,
             TypeErrorKind::MatchNotExhaustive,

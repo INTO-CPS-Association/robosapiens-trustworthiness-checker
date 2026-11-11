@@ -512,3 +512,45 @@ fn reversed_declaration_chains_infer_each_root_after_its_dependencies() {
         }
     }
 }
+
+#[test]
+fn boolean_match_accepts_both_values_without_a_catch_all() {
+    for arms in [
+        "true -> 1, false -> 0",
+        "false -> 0, true -> 1",
+        "true | false -> 1",
+        "v @ true | v @ false -> 1",
+        "true if false -> 99, true -> 1, false -> 0",
+        "true if true -> 1, false -> 0, _ -> 2",
+        "v @ true -> 1, v @ false -> 0",
+        "v @ _ -> 1",
+        "v -> 1",
+    ] {
+        let source = format!(
+            "use experimental::pattern_matching\nin c:Bool\nout y:Int = match(c) {{ {arms} }}"
+        );
+        checked(&source, &StreamType::Int);
+    }
+}
+
+#[test]
+fn boolean_match_requires_unguarded_coverage_of_both_values() {
+    for arms in [
+        "true -> 1",
+        "false -> 0",
+        "true if true -> 1, false -> 0",
+        "true -> 1, false if true -> 0",
+        "true | false if true -> 1",
+        "true | true -> 1",
+        "v @ true -> 1",
+    ] {
+        let source = format!(
+            "use experimental::pattern_matching\nin c:Bool\nout y:Int = match(c) {{ {arms} }}"
+        );
+        let errors = type_check(source.parse().expect("valid source syntax"))
+            .expect_err("incomplete Boolean match");
+        assert!(errors.iter().any(|error| matches!(error,
+            SemanticError::TypeError(error) if error.kind() == &TypeErrorKind::MatchNotExhaustive
+        )), "{source}: {errors:?}");
+    }
+}
