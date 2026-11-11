@@ -72,8 +72,9 @@ const DELAYED_THEN: &str = "in c: Bool\nin x: Int\nout y: Int\ny = if c then x[1
 #[test]
 fn an_if_is_eager_unless_its_module_takes_on_lazy_if() {
     let rows = [vec![f(), i(1)], vec![f(), i(2)], vec![t(), i(3)]];
-    // Eager: the then-branch advanced on the ticks that did not select it.
-    assert_eq!(run(DELAYED_THEN, &rows), [i(0), i(0), i(2)]);
+    // Eager: the then-branch advanced on the ticks that did not select it, and its initial
+    // `Deferred` reaches the result like any other operand's.
+    assert_eq!(run(DELAYED_THEN, &rows), [Value::Deferred, i(0), i(2)]);
     // Every other experiment leaves `if` eager.
     let others = concat!(
         "use experimental::{tagged_unions, pattern_matching, generics, modules, ",
@@ -81,7 +82,7 @@ fn an_if_is_eager_unless_its_module_takes_on_lazy_if() {
     );
     assert_eq!(
         run(&format!("{others}{DELAYED_THEN}"), &rows),
-        [i(0), i(0), i(2)]
+        [Value::Deferred, i(0), i(2)]
     );
     // Lazy, whether named directly or through the meta-feature: the first tick that
     // selects the branch is the first of its timeline.
@@ -215,7 +216,7 @@ fn nested_lazy_ifs_keep_nested_timelines() {
         vec![t(), t(), i(4)],
     ];
     let (eager, lazy) = eager_and_lazy(source, &rows);
-    assert_eq!(eager, [i(0), i(0), i(2), i(3)]);
+    assert_eq!(eager, [Value::Deferred, i(0), i(2), i(3)]);
     // The inner then-branch runs first at tick 2.
     assert_eq!(lazy, [i(0), i(0), Value::Deferred, i(3)]);
 }

@@ -1226,18 +1226,16 @@ fn execute_instruction(
                 ),
                 last_else_value,
             );
-            let branch_marker = propagated_special([
+            let output = if let Some(marker) = propagated_special([
+                PartialMarker::of(&condition),
                 PartialMarker::of(&then_value),
                 PartialMarker::of(&else_value),
-            ]);
-            let output = if branch_marker == Some(PartialMarker::NoVal) {
-                ScalarValue::NoVal
+            ]) {
+                marker.into_value()
             } else {
                 match condition {
                     ScalarValue::Bool(true) => then_value,
                     ScalarValue::Bool(false) => else_value,
-                    ScalarValue::Deferred => ScalarValue::Deferred,
-                    ScalarValue::NoVal => ScalarValue::NoVal,
                     _ => unreachable!("eager-select condition is boolean"),
                 }
             };
