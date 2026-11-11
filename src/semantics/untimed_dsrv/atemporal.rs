@@ -23,7 +23,7 @@ use ecow::EcoVec;
 
 use crate::VarName;
 use crate::core::values::operations::{self as value_operations, ListFilter};
-use crate::core::{BinaryOperator, PartialMarker, UnaryOperator, Value};
+use crate::core::{PartialMarker, UnaryOperator, Value};
 use crate::lang::dsrv::IfPolicy;
 use crate::lang::dsrv::ast::{ExprRef, ExprView};
 use crate::lang::dsrv::patterns::{
@@ -155,17 +155,10 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
             }),
         BinOp(left, right, operator) => {
             let (left, right) = (child(left)?, child(right)?);
-            match operator {
-                // The boolean operators are not strict in their operands,
-                // and neither is the combinator: a known-deciding operand
-                // settles the result whatever the other one is.
-                BinaryOperator::And | BinaryOperator::Or | BinaryOperator::Implication => {
-                    operation(value_operations::binary(operator, left, right))
-                }
-                operator => lift2(left, right, |left, right| {
-                    operation(value_operations::binary(operator, left, right))
-                }),
-            }
+            // Binary logical operations are eager and use the same marker lifting.
+            lift2(left, right, |left, right| {
+                operation(value_operations::binary(operator, left, right))
+            })
         }
         Ascribe(value, _) => child(value),
         Cast(value, target) => lift1(child(value)?, |value| {
@@ -518,6 +511,53 @@ mod tests {
         let expr = parse_expr_with_context(source, context)
             .unwrap_or_else(|error| panic!("{source}: {error}"));
         eval_atemporal(expr.as_ref(), environment)
+    }
+
+    #[test]
+    fn atemporal_boolean_operations_propagate_missing_and_deferred_values() {
+        use Value::{Bool, Deferred, NoVal};
+
+        // Columns are the expected conjunction, disjunction and implication.
+        let cases = [
+            (NoVal, NoVal, [NoVal, NoVal, NoVal]),
+            (NoVal, Deferred, [NoVal, NoVal, NoVal]),
+            (NoVal, Bool(false), [NoVal, NoVal, NoVal]),
+            (NoVal, Bool(true), [NoVal, NoVal, NoVal]),
+            (Deferred, NoVal, [NoVal, NoVal, NoVal]),
+            (Deferred, Deferred, [Deferred, Deferred, Deferred]),
+            (Deferred, Bool(false), [Deferred, Deferred, Deferred]),
+            (Deferred, Bool(true), [Deferred, Deferred, Deferred]),
+            (Bool(false), NoVal, [NoVal, NoVal, NoVal]),
+            (Bool(false), Deferred, [Deferred, Deferred, Deferred]),
+            (
+                Bool(false),
+                Bool(false),
+                [Bool(false), Bool(false), Bool(true)],
+            ),
+            (
+                Bool(false),
+                Bool(true),
+                [Bool(false), Bool(true), Bool(true)],
+            ),
+            (Bool(true), NoVal, [NoVal, NoVal, NoVal]),
+            (Bool(true), Deferred, [Deferred, Deferred, Deferred]),
+            (
+                Bool(true),
+                Bool(false),
+                [Bool(false), Bool(true), Bool(false)],
+            ),
+            (Bool(true), Bool(true), [Bool(true), Bool(true), Bool(true)]),
+        ];
+        for (left, right, expected) in cases {
+            let bindings = environment([("x", left.clone()), ("y", right.clone())]);
+            for (source, expected) in ["x && y", "x || y", "x => y"].into_iter().zip(expected) {
+                assert_eq!(
+                    evaluate(source, &bindings),
+                    Ok(expected),
+                    "{source} with x={left:?}, y={right:?}"
+                );
+            }
+        }
     }
 
     // Eager evaluation reads both branches, so an unselected branch can

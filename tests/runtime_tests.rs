@@ -1607,6 +1607,38 @@ fn test_an_eager_if_uses_marker_consuming_operand_results() {
     );
 }
 
+#[test]
+fn test_atemporal_boolean_operations_in_matches_propagate_initial_absence() {
+    use Value::{Bool, NoVal};
+
+    for (operator, expected) in [
+        ("&&", [NoVal, Bool(false), Bool(false)]),
+        ("||", [NoVal, Bool(true), Bool(true)]),
+        ("=>", [NoVal, Bool(false), Bool(true)]),
+    ] {
+        for expression in [
+            format!("match(a {operator} b) {{ true -> true, false -> false }}"),
+            format!("match(a) {{ v if (v {operator} b) -> true, _ -> false }}"),
+            format!("match(a) {{ _ -> (a {operator} b) }}"),
+            format!("matches(a, v if (v {operator} b))"),
+        ] {
+            let spec = format!(
+                "use experimental::pattern_matching\n\
+                 in a: Bool\nin b: Bool\nout w: Bool = {expression}"
+            );
+            assert_runtime_trace_everywhere(
+                &spec,
+                &[
+                    ("a", vec![Bool(false), Bool(true), Bool(false)]),
+                    ("b", vec![NoVal, Bool(false), Bool(true)]),
+                ],
+                "w",
+                &expected,
+            );
+        }
+    }
+}
+
 /// As [`run_one_tick_everywhere`], where a panic is what stopped the run wherever
 /// it happened.
 fn run_one_tick_everywhere_with_panic_text(
