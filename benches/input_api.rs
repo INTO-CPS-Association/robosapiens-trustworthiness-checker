@@ -10,7 +10,7 @@ use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::{
     monitor_outputs_untyped_async_limited, monitor_outputs_untyped_semisync_limited,
 };
-use trustworthiness_checker::core::{InputBatch, InputStream, InputUpdate, input};
+use trustworthiness_checker::core::{ExecutionPolicy, InputBatch, InputStream, InputUpdate, input};
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::io::{
     InputPipeline, InputPolicy, InputReduction, InputSource, InputSources, InputWindow,
@@ -186,6 +186,7 @@ fn prepare_dataflow(rows: usize) -> trustworthiness_checker::runtime::dataflow::
     .unwrap();
     smol::block_on(
         trustworthiness_checker::runtime::dataflow::DataflowRuntimeBuilder::new()
+            .execution_policy(ExecutionPolicy::Buffered)
             .executor(executor)
             .model(trustworthiness_checker::dsrv_fixtures::elaborate(spec))
             .input(input.into())

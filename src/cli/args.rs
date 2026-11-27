@@ -3,7 +3,10 @@ use std::{
     path::PathBuf,
 };
 
-use clap::{ArgAction, Args, Parser, ValueEnum, builder::OsStr};
+use clap::{
+    ArgAction, Args, Parser, ValueEnum,
+    builder::{ArgPredicate, OsStr},
+};
 use strum_macros::Display;
 
 use crate::core::{ExecutionPolicy, RuntimeSpec, Semantics};
@@ -390,8 +393,15 @@ pub struct Cli {
 
     #[arg(
         long,
-        help = "Input execution policy for Dataflow and MSTLO runtimes",
-        default_value_t = ExecutionPolicy::Buffered
+        help = "Input execution policy (default: synchronous for Dataflow, buffered for MSTLO)",
+        default_value_t = ExecutionPolicy::Synchronous,
+        default_value_ifs = [
+            ("language", ArgPredicate::Equals("mstlo".into()), Some("buffered")),
+            ("runtime", ArgPredicate::Equals("async".into()), Some("buffered")),
+            ("runtime", ArgPredicate::Equals("distributed".into()), Some("buffered")),
+            ("runtime", ArgPredicate::Equals("semi-sync".into()), Some("buffered")),
+            ("runtime", ArgPredicate::Equals("reconf-semi-sync".into()), Some("buffered")),
+        ]
     )]
     pub execution_policy: ExecutionPolicy,
 
@@ -678,8 +688,97 @@ mod runtime_tests {
         assert_eq!(cli.runtime, RuntimeKind::Dataflow);
         assert_eq!(
             resolve_runtime(cli.language, cli.runtime, cli.execution_policy, false,).unwrap(),
-            RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+            RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous),
         );
+    }
+
+    #[test]
+    fn execution_policy_defaults_follow_the_selected_runtime() {
+        for (runtime, expected) in [
+            (
+                "dataflow",
+                RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous),
+            ),
+            (
+                "reconf-dataflow",
+                RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous),
+            ),
+            ("async", RuntimeSpec::Async),
+            ("distributed", RuntimeSpec::Distributed),
+            ("semi-sync", RuntimeSpec::SemiSync),
+            ("reconf-semi-sync", RuntimeSpec::ReconfSemiSync),
+        ] {
+            let cli = Cli::try_parse_from([
+                "trustworthiness_checker",
+                "model.dsrv",
+                "--input-file",
+                "trace.input",
+                "--output-stdout",
+                "--runtime",
+                runtime,
+            ])
+            .unwrap();
+            assert_eq!(
+                resolve_runtime(cli.language, cli.runtime, cli.execution_policy, true).unwrap(),
+                expected,
+                "default execution policy for {runtime}",
+            );
+        }
+
+        let cli = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "model.mstlo",
+            "--input-file",
+            "trace.input",
+            "--output-stdout",
+            "--language",
+            "mstlo",
+        ])
+        .unwrap();
+        assert_eq!(
+            resolve_runtime(cli.language, cli.runtime, cli.execution_policy, false).unwrap(),
+            RuntimeSpec::Mstlo(ExecutionPolicy::Buffered),
+        );
+    }
+
+    #[test]
+    fn explicit_execution_policy_overrides_runtime_defaults() {
+        for policy in [ExecutionPolicy::Buffered, ExecutionPolicy::Synchronous] {
+            for (selector, value, expected) in [
+                ("--runtime", "dataflow", RuntimeSpec::Dataflow(policy)),
+                (
+                    "--runtime",
+                    "reconf-dataflow",
+                    RuntimeSpec::ReconfDataflow(policy),
+                ),
+                ("--language", "mstlo", RuntimeSpec::Mstlo(policy)),
+            ] {
+                let policy_name = policy.to_string();
+                let cli = Cli::try_parse_from([
+                    "trustworthiness_checker",
+                    "model",
+                    "--input-file",
+                    "trace.input",
+                    "--output-stdout",
+                    selector,
+                    value,
+                    "--execution-policy",
+                    &policy_name,
+                ])
+                .unwrap();
+                assert_eq!(
+                    resolve_runtime(
+                        cli.language,
+                        cli.runtime,
+                        cli.execution_policy,
+                        selector == "--runtime",
+                    )
+                    .unwrap(),
+                    expected,
+                    "explicit {policy} policy for {value}",
+                );
+            }
+        }
     }
 
     #[test]

@@ -63,7 +63,7 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 
 | Argument ID | Spelling | Value names | Multiplicity | Required | Requires | Possible values | Clap default | Conflicts | Help | Feature note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `execution_policy` | `--execution-policy <EXECUTION_POLICY>` | EXECUTION_POLICY | 1 value(s) | no | — | `buffered` — Permit runtime-specific pipelining and output batching<br>`synchronous` — Complete the current tick's downstream computation before accepting the next. This requires a runtime with a global logical-tick boundary | buffered | — | Input execution policy for Dataflow and MSTLO runtimes | — |
+| `execution_policy` | `--execution-policy <EXECUTION_POLICY>` | EXECUTION_POLICY | 1 value(s) | no | — | `buffered` — Permit runtime-specific pipelining and output batching<br>`synchronous` — Complete the current tick's downstream computation before accepting the next. This requires a runtime with a global logical-tick boundary | synchronous | — | Input execution policy (default: synchronous for Dataflow, buffered for MSTLO) | — |
 | `io_shutdown_timeout_ms` | `--io-shutdown-timeout-ms <MILLISECONDS>` | MILLISECONDS | 1 value(s) | no | — | — | — | — | Whole graceful I/O shutdown limit; omitted means unlimited | — |
 | `mstlo_algorithm` | `--mstlo-algorithm <MSTLO_ALGORITHM>` | MSTLO_ALGORITHM | 1 value(s) | no | — | `incremental`<br>`naive` | incremental | — | MSTLO monitor algorithm | — |
 | `mstlo_synchronization` | `--mstlo-synchronization <MSTLO_SYNCHRONIZATION>` | MSTLO_SYNCHRONIZATION | 1 value(s) | no | — | `linear`<br>`none`<br>`zero-order-hold` | zero-order-hold | — | MSTLO multi-signal synchronization strategy | — |
