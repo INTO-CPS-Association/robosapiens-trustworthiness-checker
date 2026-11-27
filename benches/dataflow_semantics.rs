@@ -5,7 +5,7 @@ use std::time::Duration;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use smol::LocalExecutor;
-use trustworthiness_checker::core::{Runtime, Semantics};
+use trustworthiness_checker::core::{ExecutionPolicy, Runtime, Semantics};
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::io::{OutputBackendConfig, OutputPipeline};
@@ -88,6 +88,7 @@ async fn monitor_recursive_outputs_dataflow(
         .await
         .expect("dataflow benchmark output pipeline should open");
     let monitor = DataflowRuntimeBuilder::new()
+        .execution_policy(ExecutionPolicy::Buffered)
         .executor(executor.clone())
         .model(spec)
         .input(input_stream.into())
@@ -131,6 +132,7 @@ async fn monitor_recursive_outputs_typed_dataflow(
         .await
         .expect("typed dataflow benchmark output pipeline should open");
     let monitor = DataflowRuntimeBuilder::new()
+        .execution_policy(ExecutionPolicy::Buffered)
         .executor(executor.clone())
         .model(spec)
         .input(input_stream.into())

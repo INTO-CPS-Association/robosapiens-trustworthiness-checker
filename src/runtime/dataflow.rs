@@ -72,8 +72,8 @@
 //!
 //! | policy | when buffers flush | intended effect |
 //! |:-------|:-------------------|:----------------|
-//! | [`ExecutionPolicy::Buffered`] (default) | After 256 logical ticks, plus a final non-empty partial batch at input EOF. | Amortize output-writer overhead across many values. |
-//! | [`ExecutionPolicy::Synchronous`] | After every logical tick. | Send that tick's output batch to the writer before polling the next input tick. |
+//! | [`ExecutionPolicy::Buffered`] | After 256 logical ticks, plus a final non-empty partial batch at input EOF. | Amortize output-writer overhead across many values. |
+//! | [`ExecutionPolicy::Synchronous`] (default) | After every logical tick. | Send that tick's output batch to the writer before polling the next input tick. |
 //!
 //! Synchronous policy sends one complete row to the writer at a time. A successful asynchronous
 //! send does not necessarily mean the external sink has persisted or consumed the value.
@@ -565,7 +565,7 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for DataflowRuntimeBuild
             input: None,
             output_writer: None,
             semantics: Semantics::TypedUntimed,
-            execution_policy: ExecutionPolicy::Buffered,
+            execution_policy: ExecutionPolicy::Synchronous,
             quickening: true,
             #[cfg(feature = "jit")]
             jit_config: None,
@@ -2096,6 +2096,7 @@ mod tests {
         let spec = elaborated(&spec_src);
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let runtime = DataflowRuntimeBuilder::new()
+            .execution_policy(ExecutionPolicy::Buffered)
             .semantics(Semantics::Untimed)
             .executor(executor.clone())
             .model(spec)
@@ -2176,6 +2177,7 @@ mod tests {
         let batches = Rc::new(RefCell::new(Vec::new()));
         let spec = elaborated("in x: Int\nin y: Int\nout a\nout z\na = x\nz = y");
         let runtime = DataflowRuntimeBuilder::new()
+            .execution_policy(ExecutionPolicy::Buffered)
             .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
@@ -2342,14 +2344,11 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn direct_dataflow_synchronous_policy_emits_one_row_batches(
-        executor: Rc<LocalExecutor<'static>>,
-    ) {
+    async fn direct_dataflow_defaults_to_one_row_batches(executor: Rc<LocalExecutor<'static>>) {
         let batches = Rc::new(RefCell::new(Vec::new()));
         let spec = elaborated("in x: Int\nout z\nz = x");
         let runtime = DataflowRuntimeBuilder::new()
             .semantics(Semantics::Untimed)
-            .execution_policy(ExecutionPolicy::Synchronous)
             .executor(executor)
             .model(spec)
             .input(

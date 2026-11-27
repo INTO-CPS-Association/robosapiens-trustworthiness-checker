@@ -640,7 +640,7 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
 
 impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
     pub fn new() -> Self {
-        Self::with_defaults(RuntimeSpec::Dataflow(ExecutionPolicy::Buffered))
+        Self::with_defaults(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
     }
 
     fn with_defaults(runtime: RuntimeSpec) -> Self {
@@ -1533,11 +1533,11 @@ mod tests {
     struct FailingOutputBackend;
 
     #[test]
-    fn general_builder_defaults_to_buffered_dataflow() {
+    fn general_builder_defaults_to_synchronous_dataflow() {
         let builder = GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new();
         assert_eq!(
             builder.runtime,
-            RuntimeSpec::Dataflow(ExecutionPolicy::Buffered)
+            RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous)
         );
     }
 

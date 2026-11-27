@@ -4,7 +4,7 @@ The generated rows above are parser metadata. The following constraints come fro
 
 Run the main binary as `trustworthiness_checker MODEL INPUT_SELECTION [OUTPUT_SELECTION]`. From a repository checkout, use `cargo run -- MODEL ...`. Exactly one member of the `InputMode` group is required. The `OutputSelection` group is optional: when no output member is selected, the adapter falls back to stdout.
 
-The default values are DSRV, `untimed` semantics, the `dataflow` runtime, and buffered execution. The default distributed mode is centralised. These defaults are parser defaults; a parsed command still has to pass runtime, language, feature, and resource validation.
+The default values are DSRV, `untimed` semantics, the `dataflow` runtime, and synchronous execution. MSTLO defaults to buffered execution. The default distributed mode is centralised. These defaults are parser defaults; a parsed command still has to pass runtime, language, feature, and resource validation.
 
 ## Compatibility rules
 
